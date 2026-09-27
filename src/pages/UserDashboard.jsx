@@ -19,7 +19,18 @@ import { FaChevronLeft, FaChevronRight } from "react-icons/fa";
 import NewsAndUpdates from './NewsAndUpdates';
 import useNotificationSocket from "../hooks/useNotificationSocket";
 
-import { fetchClients, createClient, verifyGstin, gstFilingStatus, fetchNotificationPreferences, updateNotificationPreferences, fetchPlans, fetchMySubscription, selectPlan, fetchPayments, fetchNotifications, markNotificationsRead, markAllNotificationsRead } from "../api/services";
+import { fetchClients, createClient, verifyGstin, gstFilingStatus, fetchNotificationPreferences, updateNotificationPreferences, fetchPlans, fetchMySubscription, selectPlan, fetchPayments, fetchNotifications, markNotificationsRead, markAllNotificationsRead, fetchDashboardLinks } from "../api/services";
+
+let dashboardLinksPromise = null;
+function loadDashboardLinksOnce() {
+  if (!dashboardLinksPromise) {
+    dashboardLinksPromise = Promise.all([
+      fetchDashboardLinks("link").then((d) => (d.results || d).slice()).catch(() => []),
+      fetchDashboardLinks("portal").then((d) => (d.results || d).slice()).catch(() => []),
+    ]).then(([links, portals]) => ({ links, portals }));
+  }
+  return dashboardLinksPromise;
+}
 import { getProfile, updateProfile, saveSession, getStoredUser, clearSession, getRole, changeUserPassword, fetchSessions, revokeSession, revokeAllSessions, fetchLoginActivity } from "../api/auth";
 
 
@@ -230,6 +241,7 @@ useEffect(() => {
 const [notificationsList, setNotificationsList] = useState([]);
 const [unreadCount, setUnreadCount] = useState(0);
 const [notifPulse, setNotifPulse] = useState(false);
+const notifPollRef = useRef(false);
 
 const normalizeNotifications = (data) => {
   if (Array.isArray(data)) return data;
@@ -249,13 +261,14 @@ useEffect(() => {
       .catch(() => {});
   };
 
-  load();
-  const poll = setInterval(load, 20000);
+  if (!notifPollRef.current) {
+    notifPollRef.current = true;
+    load();
+  }
   const onFocus = () => load();
   window.addEventListener("focus", onFocus);
   return () => {
     cancelled = true;
-    clearInterval(poll);
     window.removeEventListener("focus", onFocus);
   };
 }, []);
@@ -14720,19 +14733,19 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
   const [selectedGrowthPoint, setSelectedGrowthPoint] = useState(null);
   const [selectedFilingItem, setSelectedFilingItem] = useState(null);
 
-  const [importantLinks, setImportantLinks] = useState([
-    { id: 1, label: "News & Updates", url: "https://www.gst.gov.in/newsandupdates", icon: "🖥️" },
-    { id: 2, label: "Popular Help Topics", url: "https://www.gst.gov.in/help", icon: "🌐" },
-    { id: 3, label: "GST Media Youtube", url: "https://www.youtube.com/@CBIC-GST", icon: "▶️" },
-    { id: 4, label: "GST Notifications", url: "https://www.gst.gov.in/notification", icon: "📋" },
-  ]);
-  const [importantPortals, setImportantPortals] = useState([
-    { id: 1, label: "GST Portal", url: "https://www.gst.gov.in", icon: "🏛️" },
-    { id: 2, label: "E-Way Bill Portal", url: "https://ewaybillgst.gov.in", icon: "📦" },
-    { id: 3, label: "E-Invoice Portal", url: "https://einvoice1.gst.gov.in", icon: "📄" },
-    { id: 4, label: "Grievance Portal", url: "https://selfservice.gstsystem.in", icon: "⚖️" },
-    { id: 5, label: "CBIC Portal", url: "https://cbic.gov.in", icon: "🏦" },
-  ]);
+  const [importantLinks, setImportantLinks] = useState([]);
+  const [importantPortals, setImportantPortals] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    loadDashboardLinksOnce()
+      .then(({ links, portals }) => {
+        if (cancelled) return;
+        setImportantLinks(links);
+        setImportantPortals(portals);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   const [showAddLink, setShowAddLink] = useState(false);
   const [showAddPortal, setShowAddPortal] = useState(false);
   const [newLinkLabel, setNewLinkLabel] = useState("");
@@ -14995,8 +15008,12 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
 </div>
             <div>
               <div style={{ fontSize:"0.80rem", fontWeight:800, color:"#0f172a" }}>Imp. Portals</div>
-              <div style={{ fontSize:"0.63rem", color:"#64748b", marginTop:"2px" }}>GST, E-Way, CBIC</div>
-              <div style={{ fontSize:"0.60rem", color:"#0891b2", fontWeight:700, marginTop:"2px" }}>5 portals →</div>
+              <div style={{ fontSize:"0.63rem", color:"#64748b", marginTop:"2px" }}>
+                {importantPortals.length
+                  ? importantPortals.slice(0,3).map(p=>p.label.split(" ")[0]).join(", ")
+                  : "Govt. Portals"}
+              </div>
+              <div style={{ fontSize:"0.60rem", color:"#0891b2", fontWeight:700, marginTop:"2px" }}>{importantPortals.length} portals →</div>
             </div>
           </div>
         </div>

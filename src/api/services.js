@@ -55,6 +55,10 @@ export const fetchPayments = () =>
 export const fetchNews = (params = {}) =>
   api.get("/gst-app/news/", { params }).then((r) => r.data);
 
+// ── Dashboard links & portals ────────────────────────────────────────
+export const fetchDashboardLinks = (kind) =>
+  api.get("/gst-app/dashboard-links/", { params: { kind } }).then((r) => r.data);
+
 // ── Returns (GSTR grid persistence) ──────────────────────────────────
 export const fetchReturnSections = (params) =>
   api.get("/gst-app/returns/", { params }).then((r) => r.data);

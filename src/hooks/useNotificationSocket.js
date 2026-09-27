@@ -25,7 +25,7 @@ export default function useNotificationSocket({ onMessage, enabled = true } = {}
 
     let socket = null;
     let closedByUs = false;
-    let retries = 0;
+    let retried = false;
     let retryTimer = null;
 
     const connect = () => {
@@ -36,7 +36,6 @@ export default function useNotificationSocket({ onMessage, enabled = true } = {}
 
       socket.onopen = () => {
         setConnected(true);
-        retries = 0;
       };
 
       socket.onmessage = (event) => {
@@ -51,9 +50,9 @@ export default function useNotificationSocket({ onMessage, enabled = true } = {}
       socket.onclose = () => {
         setConnected(false);
         if (closedByUs) return;
-        const delay = Math.min(1000 * 2 ** retries, 15000);
-        retries += 1;
-        retryTimer = setTimeout(connect, delay);
+        if (retried) return; // only one retry, then stop
+        retried = true;
+        retryTimer = setTimeout(connect, 3000);
       };
 
       socket.onerror = () => socket.close();
