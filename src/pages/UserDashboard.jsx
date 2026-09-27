@@ -17,8 +17,9 @@ import { FaChevronLeft, FaChevronRight } from "react-icons/fa";
 
 
 import NewsAndUpdates from './NewsAndUpdates';
+import useNotificationSocket from "../hooks/useNotificationSocket";
 
-import { fetchClients, createClient, verifyGstin, gstFilingStatus, fetchNotificationPreferences, updateNotificationPreferences, fetchPlans, fetchMySubscription, selectPlan, fetchPayments } from "../api/services";
+import { fetchClients, createClient, verifyGstin, gstFilingStatus, fetchNotificationPreferences, updateNotificationPreferences, fetchPlans, fetchMySubscription, selectPlan, fetchPayments, fetchNotifications, markNotificationsRead, markAllNotificationsRead } from "../api/services";
 import { getProfile, updateProfile, saveSession, getStoredUser, clearSession, getRole, changeUserPassword, fetchSessions, revokeSession, revokeAllSessions, fetchLoginActivity } from "../api/auth";
 
 
@@ -224,6 +225,70 @@ useEffect(() => {
     })
     .catch(() => {});
 }, []);
+
+// ---- Notifications (header badge + /user/notifications page) ---------------
+const [notificationsList, setNotificationsList] = useState([]);
+const [unreadCount, setUnreadCount] = useState(0);
+const [notifPulse, setNotifPulse] = useState(false);
+
+const normalizeNotifications = (data) => {
+  if (Array.isArray(data)) return data;
+  return (data && Array.isArray(data.results)) ? data.results : [];
+};
+
+useEffect(() => {
+  let cancelled = false;
+  const load = () => {
+    fetchNotifications()
+      .then((data) => {
+        if (cancelled) return;
+        const items = normalizeNotifications(data).slice(0, 100);
+        setNotificationsList(items);
+        setUnreadCount(items.filter((n) => !n.is_read).length);
+      })
+      .catch(() => {});
+  };
+
+  load();
+  const poll = setInterval(load, 20000);
+  const onFocus = () => load();
+  window.addEventListener("focus", onFocus);
+  return () => {
+    cancelled = true;
+    clearInterval(poll);
+    window.removeEventListener("focus", onFocus);
+  };
+}, []);
+
+useNotificationSocket({
+  onMessage: (msg) => {
+    if (!msg || msg.type !== "notification.new" || !msg.notification) return;
+    const n = msg.notification;
+    setNotificationsList((prev) => [
+      n,
+      ...prev.filter((existing) => existing.id !== n.id),
+    ]);
+    if (!n.is_read) {
+      setUnreadCount((c) => c + 1);
+      setNotifPulse(true);
+      setTimeout(() => setNotifPulse(false), 2200);
+    }
+  },
+});
+
+const handleMarkNotificationRead = (id) => {
+  setNotificationsList((prev) =>
+    prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
+  );
+  setUnreadCount((c) => Math.max(0, c - 1));
+  markNotificationsRead([id]).catch(() => {});
+};
+
+const handleMarkAllRead = () => {
+  setNotificationsList((prev) => prev.map((n) => ({ ...n, is_read: true })));
+  setUnreadCount(0);
+  markAllNotificationsRead().catch(() => {});
+};
 
 
   const [editProfileForm, setEditProfileForm] = useState({ ...user });
@@ -17362,9 +17427,8 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
     </div>
   );
 };
-  const NotificationsPage = () => {
+  const NotificationsPage = ({ notifications = [], onMarkRead, onMarkAllRead }) => {
     const [filter, setFilter] = React.useState("all");
-    const [readIds, setReadIds] = React.useState([]);
 
     // Load reminders from localStorage (set from calendar)
     const [calReminders, setCalReminders] = React.useState(() => {
@@ -17388,81 +17452,96 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
 
     const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-   const allNotifs = [
-  {
-    id: 1,
-    type: "deadline",
-    icon: "⏰",
-    color: "#ef4444",
-    bg: "#ffffff",
-    border: "#e2e8f0",
-    title: "GSTR-3B Due Alert",
-    body: "GSTR-3B is due in 3 days for ABC Corp (GSTIN: 27AAACC1001Z1). File immediately to avoid late fees.",
-    time: "2 hours ago",
-    tag: "Urgent",
-    tagColor: "#ef4444",
-  },
+    const typeMeta = (type) => {
+      const t = (type || "Info").toLowerCase();
+      if (t === "deadline") return { icon: "⏰", color: "#ef4444", tag: "Urgent" };
+      if (t === "success") return { icon: "✅", color: "#16a34a", tag: "Filed" };
+      if (t === "upload") return { icon: "📁", color: "#4f46e5", tag: "Upload" };
+      if (t === "warning") return { icon: "⚠️", color: "#f59e0b", tag: "Action Needed" };
+      if (t === "info") return { icon: "📊", color: "#4f46e5", tag: "Info" };
+      return { icon: "🔔", color: "#64748b", tag: type || "Info" };
+    };
 
-  {
-    id: 2,
-    type: "success",
-    icon: "✅",
-    color: "#16a34a",
-    bg: "#ffffff",
-    border: "#e2e8f0",
-    title: "GSTR-7 Filed Successfully",
-    body: "GSTR-7 for December 2025 has been reconciled and filed successfully.",
-    time: "5 hours ago",
-    tag: "Filed",
-    tagColor: "#16a34a",
-  },
+    const timeAgo = (iso) => {
+      if (!iso) return "";
+      const then = new Date(iso);
+      if (Number.isNaN(then.getTime())) return "";
+      const secs = Math.floor((Date.now() - then.getTime()) / 1000);
+      if (secs < 60) return "Just now";
+      if (secs < 3600) return `${Math.floor(secs / 60)} min ago`;
+      if (secs < 86400) return `${Math.floor(secs / 3600)} ${secs >= 7200 ? "hours" : "hour"} ago`;
+      const days = Math.floor(secs / 86400);
+      if (days === 1) return "Yesterday";
+      if (days < 30) return `${days} days ago`;
+      return then.toLocaleDateString();
+    };
 
-  {
-    id: 3,
-    type: "upload",
-    icon: "📁",
-    color: "#4f46e5",
-    bg: "#ffffff",
-    border: "#e2e8f0",
-    title: "New Voucher Uploaded",
-    body: "A new purchase voucher has been uploaded.",
-    time: "Yesterday",
-    tag: "Upload",
-    tagColor: "#4f46e5",
-  },
+    const NotifView = ({ n }) => {
+      const meta = typeMeta(n.notification_type);
+      const isRead = !!n.is_read;
+      return (
+        <div key={n.id} onClick={() => onMarkRead && onMarkRead(n.id)} style={{
+          background: isRead ? "#fafafa" : "#ffffff",
+          border: `1px solid ${isRead ? "#f1f5f9" : "#e8edf5"}`,
+          borderRadius: "12px",
+          padding: "11px 14px",
+          display: "flex", gap: "12px", alignItems: "center",
+          cursor: "pointer", transition: "all 0.18s",
+          boxShadow: isRead
+            ? "0 1px 3px rgba(0,0,0,0.03)"
+            : "0 2px 8px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.8)",
+          position: "relative",
+          opacity: isRead ? 0.78 : 1,
+        }}
+        onMouseEnter={e => { e.currentTarget.style.boxShadow = "0 4px 14px rgba(0,0,0,0.09)"; e.currentTarget.style.borderColor = "#d1d9e8"; }}
+        onMouseLeave={e => { e.currentTarget.style.boxShadow = isRead ? "0 1px 3px rgba(0,0,0,0.03)" : "0 2px 8px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.8)"; e.currentTarget.style.borderColor = isRead ? "#f1f5f9" : "#e8edf5"; }}
+        >
+          {!isRead && (
+            <span style={{
+              position: "absolute", top: "10px", right: "12px",
+              width: "7px", height: "7px", borderRadius: "50%",
+              background: meta.color,
+              boxShadow: `0 0 5px ${meta.color}`,
+            }} />
+          )}
+          {/* Icon */}
+          <div style={{
+            width: "36px", height: "36px", minWidth: "36px",
+            borderRadius: "10px",
+            background: meta.color + "14",
+            border: `1.5px solid ${meta.color}22`,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: "1.05rem",
+            boxShadow: `0 2px 0 ${meta.color}18`,
+            flexShrink: 0,
+          }}>
+            {meta.icon}
+          </div>
+          {/* Content */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "7px", marginBottom: "2px", flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 700, fontSize: "0.85rem", color: "#0f172a" }}>{n.title}</span>
+              <span style={{
+                padding: "1px 7px", borderRadius: "999px",
+                background: meta.color + "18",
+                color: meta.color,
+                fontSize: "0.66rem", fontWeight: 700,
+                border: `1px solid ${meta.color}33`,
+              }}>{meta.tag}</span>
+            </div>
+            <p style={{ margin: 0, fontSize: "0.78rem", color: "#64748b", lineHeight: 1.45 }}>{n.message}</p>
+            <div style={{ marginTop: "3px", fontSize: "0.68rem", color: "#94a3b8", fontWeight: 500 }}>{timeAgo(n.created_at)}</div>
+          </div>
+        </div>
+      );
+    };
 
-  {
-    id: 4,
-    type: "warning",
-    icon: "⚠️",
-    color: "#f59e0b",
-    bg: "#ffffff",
-    border: "#e2e8f0",
-    title: "Missing Documents",
-    body: "3 invoices unmatched in ITC reconciliation.",
-    time: "Yesterday",
-    tag: "Action Needed",
-    tagColor: "#f59e0b",
-  },
-
-  {
-    id: 5,
-    type: "info",
-    icon: "📊",
-    color: "#4f46e5",
-    bg: "#ffffff",
-    border: "#e2e8f0",
-    title: "Monthly Report Ready",
-    body: "Your GST compliance report is ready.",
-    time: "2 days ago",
-    tag: "Report",
-    tagColor: "#4f46e5",
-  }
-];
-    const filtered = filter === "all" ? allNotifs : filter === "unread" ? allNotifs.filter(n => !readIds.includes(n.id)) : allNotifs.filter(n => n.type === filter);
-    const markAllRead = () => setReadIds(allNotifs.map(n => n.id));
-    const markRead = (id) => setReadIds(prev => [...new Set([...prev, id])]);
-    const unreadCount = allNotifs.filter(n => !readIds.includes(n.id)).length;
+    const filtered = filter === "all"
+      ? notifications
+      : filter === "unread"
+        ? notifications.filter((n) => !n.is_read)
+        : notifications.filter((n) => (n.notification_type || "").toLowerCase() === filter);
+    const unread = notifications.filter((n) => !n.is_read).length;
     return (
       <div style={{ padding: "20px 24px", background: "#f0f2f7", minHeight: "100vh", fontFamily: "inherit" }}>
 
@@ -17490,7 +17569,7 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
               </h1>
             </div>
             <p style={{ margin: 0, color: "#64748b", fontSize: "0.78rem", fontWeight: 500 }}>
-              {unreadCount} unread · {allNotifs.length} total
+              {unread} unread · {notifications.length} total
             </p>
           </div>
 
@@ -17511,8 +17590,8 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
                 {f === "all" ? "All" : f.charAt(0).toUpperCase() + f.slice(1)}
               </button>
             ))}
-            {unreadCount > 0 && (
-              <button onClick={markAllRead} style={{
+            {unread > 0 && (
+              <button onClick={onMarkAllRead} style={{
                 padding: "5px 13px", borderRadius: "10px", cursor: "pointer",
                 background: "linear-gradient(135deg, #f3f0ff, #ede9fe)",
                 color: "#4f46e5",
@@ -17542,64 +17621,7 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
                 <div style={{ fontWeight: 600, fontSize: "0.95rem" }}>No notifications here</div>
               </div>
             )}
-            {filtered.map(notif => {
-              const isRead = readIds.includes(notif.id);
-              return (
-                <div key={notif.id} onClick={() => markRead(notif.id)} style={{
-                  background: isRead ? "#fafafa" : "#ffffff",
-                  border: `1px solid ${isRead ? "#f1f5f9" : "#e8edf5"}`,
-                  borderRadius: "12px",
-                  padding: "11px 14px",
-                  display: "flex", gap: "12px", alignItems: "center",
-                  cursor: "pointer", transition: "all 0.18s",
-                  boxShadow: isRead
-                    ? "0 1px 3px rgba(0,0,0,0.03)"
-                    : "0 2px 8px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.8)",
-                  position: "relative",
-                  opacity: isRead ? 0.78 : 1,
-                }}
-                onMouseEnter={e => { e.currentTarget.style.boxShadow = "0 4px 14px rgba(0,0,0,0.09)"; e.currentTarget.style.borderColor = "#d1d9e8"; }}
-                onMouseLeave={e => { e.currentTarget.style.boxShadow = isRead ? "0 1px 3px rgba(0,0,0,0.03)" : "0 2px 8px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.8)"; e.currentTarget.style.borderColor = isRead ? "#f1f5f9" : "#e8edf5"; }}
-                >
-                  {!isRead && (
-                    <span style={{
-                      position: "absolute", top: "10px", right: "12px",
-                      width: "7px", height: "7px", borderRadius: "50%",
-                      background: notif.color,
-                      boxShadow: `0 0 5px ${notif.color}`,
-                    }} />
-                  )}
-                  {/* Icon */}
-                  <div style={{
-                    width: "36px", height: "36px", minWidth: "36px",
-                    borderRadius: "10px",
-                    background: notif.color + "14",
-                    border: `1.5px solid ${notif.color}22`,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: "1.05rem",
-                    boxShadow: `0 2px 0 ${notif.color}18`,
-                    flexShrink: 0,
-                  }}>
-                    {notif.icon}
-                  </div>
-                  {/* Content */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "7px", marginBottom: "2px", flexWrap: "wrap" }}>
-                      <span style={{ fontWeight: 700, fontSize: "0.85rem", color: "#0f172a" }}>{notif.title}</span>
-                      <span style={{
-                        padding: "1px 7px", borderRadius: "999px",
-                        background: notif.tagColor + "18",
-                        color: notif.tagColor,
-                        fontSize: "0.66rem", fontWeight: 700,
-                        border: `1px solid ${notif.tagColor}33`,
-                      }}>{notif.tag}</span>
-                    </div>
-                    <p style={{ margin: 0, fontSize: "0.78rem", color: "#64748b", lineHeight: 1.45 }}>{notif.body}</p>
-                    <div style={{ marginTop: "3px", fontSize: "0.68rem", color: "#94a3b8", fontWeight: 500 }}>{notif.time}</div>
-                  </div>
-                </div>
-              );
-            })}
+            {filtered.map(n => <NotifView key={n.id} n={n} />)}
           </div>
         </div>
 
@@ -18876,7 +18898,7 @@ case "/user/gst-return":
   
 
   case "/user/notifications":
-    pageContent = <NotificationsPage />;
+    pageContent = <NotificationsPage notifications={notificationsList} onMarkRead={handleMarkNotificationRead} onMarkAllRead={handleMarkAllRead} />;
     break;
 
   case "/user/settings":
@@ -19123,12 +19145,17 @@ useEffect(() => {
               background: "#ef4444",
               color: "#fff",
               fontSize: "0.58rem", fontWeight: 800,
-              width: "17px", height: "17px",
-              borderRadius: "50%",
-              display: "flex", alignItems: "center", justifyContent: "center",
+              minWidth: "17px", height: "17px",
+              padding: "0 3px",
+              borderRadius: "9px",
+              display: unreadCount > 0 ? "flex" : "none",
+              alignItems: "center", justifyContent: "center",
               border: "2px solid #f8fafc",
-              boxShadow: "0 1px 4px rgba(239,68,68,0.5)",
-            }}>5</span>
+              boxShadow: notifPulse
+                ? "0 0 0 4px rgba(239,68,68,0.45), 0 1px 4px rgba(239,68,68,0.5)"
+                : "0 1px 4px rgba(239,68,68,0.5)",
+              transition: "box-shadow 0.25s",
+            }}>{unreadCount > 9 ? "9+" : unreadCount}</span>
           </div>
 
           {/* DotMatrix left of user profile */}
