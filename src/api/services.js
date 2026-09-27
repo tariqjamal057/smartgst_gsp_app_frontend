@@ -4,6 +4,9 @@ import api from "./axios";
 export const fetchClients = (params = {}) =>
   api.get("/gst-app/clients/", { params }).then((r) => r.data);
 
+export const fetchClientStats = () =>
+  api.get("/gst-app/clients/stats/").then((r) => r.data);
+
 export const createClient = (data) => api.post("/gst-app/clients/", data);
 
 export const updateClient = (id, data) => api.patch(`/gst-app/clients/${id}/`, data);

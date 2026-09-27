@@ -119,18 +119,13 @@ export default function AddClientModal({
         }));
         toast.success("GSTIN verified from live GSTN (Vanaya)! Remaining fields fill kar lein.");
       })
-      .catch(() => {
-        const { pan, state } = derive();
-        setForm((prev) => ({
-          ...prev,
-          gstin,
-          pan,
-          state,
-          legalName: prev.legalName || "",
-          tradeName: prev.tradeName || "",
-          taxpayerType: prev.taxpayerType || "Regular",
-        }));
-        toast.warn("Live lookup unavailable – GSTIN data guessed locally.");
+      .catch((err) => {
+        const detail = err?.response?.data?.detail
+          || (err?.response
+            ? "GSTIN invalid hai — sandbox me ye GST number nahi mila. Sahi GSTIN daalein."
+            : "Live GSTN lookup unavailable (network error). Dobara try karein.");
+        setForm((prev) => ({ ...prev, gstin }));
+        toast.error(`❌ ${detail}`);
       })
       .finally(() => setLookupLoading(false));
   };

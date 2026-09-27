@@ -19,7 +19,7 @@ import { FaChevronLeft, FaChevronRight } from "react-icons/fa";
 import NewsAndUpdates from './NewsAndUpdates';
 import useNotificationSocket from "../hooks/useNotificationSocket";
 
-import { fetchClients, gstFilingStatus, fetchNotificationPreferences, updateNotificationPreferences, fetchPlans, fetchMySubscription, selectPlan, fetchPayments, fetchNotifications, markNotificationsRead, markAllNotificationsRead, fetchDashboardLinks } from "../api/services";
+import { fetchClients, fetchClientStats, gstFilingStatus, fetchNotificationPreferences, updateNotificationPreferences, fetchPlans, fetchMySubscription, selectPlan, fetchPayments, fetchNotifications, markNotificationsRead, markAllNotificationsRead, fetchDashboardLinks, updateClient as apiUpdateClient, deleteClient as apiDeleteClient } from "../api/services";
 import AddClientModal from "../components/AddClientModal";
 
 let dashboardLinksPromise = null;
@@ -2255,22 +2255,9 @@ const YourReturnsComponent = () => {
     { id: 6, clientName: "Client F", company: "Company 6", gstin: "27AAACC1006Z6", pan: "ABCDE1239K", mobile: "9876543215", amount: "₹0.6 Cr" },
     { id: 7, clientName: "Client G", company: "Company 7", gstin: "27AAACC1007Z7", pan: "ABCDE1240L", mobile: "9876543216", amount: "₹0.7 Cr" },
   ];
-  const defaultClients = []; // Static demo data removed — real clients load from backend/localStorage
+  const [allClients, setAllClients] = useState([]);
 
-  const [allClients, setAllClients] = useState(() => {
-    try {
-      const saved = localStorage.getItem("gst_all_clients");
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return defaultClients;
-  });
-
-  // Persist allClients to localStorage whenever it changes
-  useEffect(() => {
-    try { localStorage.setItem("gst_all_clients", JSON.stringify(allClients)); } catch {}
-  }, [allClients]);
-
-  // Load clients from the Django backend (live). Falls back to local data.
+  // Clients load ONLY from the Django backend (single source of truth, no local cache)
   useEffect(() => {
     let cancelled = false;
     fetchClients()
@@ -2286,10 +2273,10 @@ const YourReturnsComponent = () => {
           email: c.email || "",
           state: c.state || "",
           address: c.address || "",
-          registrationType: "Regular",
-          status: "active",
+          reg_date: c.reg_date || "",
+          status: c.status || "active",
         }));
-        if (live.length) setAllClients(live);
+        setAllClients(live);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -2313,12 +2300,6 @@ const YourReturnsComponent = () => {
     const n = parseInt(raw, 10);
     return Number.isFinite(n) ? n : Infinity;
   })();
-  // ── Session-based client persistence (clears on browser refresh) ──
-  const SESSION_KEY = "taxmate_session_clients";
-  const saveClientsToSession = (clients) => {
-    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(clients)); } catch {}
-  };
-
   // ── Shared Add Client modal (dashboard page + clients page; form logic lives in AddClientModal) ──
   const [showAddClientModal, setShowAddClientModal] = useState(false);
 
@@ -2350,12 +2331,9 @@ const addClient = useCallback((newClient) => {
       registrationType: newClient.taxpayerType || newClient.registrationType || "Regular",
       state: newClient.state || "Maharashtra",
       email: newClient.email || `client${newId}@example.com`,
-      status: "active",
+      status: newClient.status || "active",
     };
-    const updated = [...prev, clientToAdd];
-    // Session-based persistence (clears on browser refresh)
-    try { sessionStorage.setItem("taxmate_session_clients", JSON.stringify(updated)); } catch {}
-    return updated;
+    return [...prev, clientToAdd];
   });
 }, []);
   const handleClientSelect = () => {
@@ -13773,14 +13751,18 @@ return (
 
   const activateClient = (id) => {
     setAllClients(prev => prev.map((c) => (c.id === id ? { ...c, status: "active" } : c)));
+    // Best-effort persistence so refreshed data matches
+    try { apiUpdateClient(id, { status: "active" }); } catch (e) {}
   };
 
   const deactivateClient = (id) => {
     setAllClients(prev => prev.map((c) => (c.id === id ? { ...c, status: "inactive" } : c)));
+    try { apiUpdateClient(id, { status: "inactive" }); } catch (e) {}
   };
 
   const deleteClient = (id) => {
     setAllClients(prev => prev.filter((c) => c.id !== id));
+    try { apiDeleteClient(id); } catch (e) {}
   };
 
 
@@ -13796,7 +13778,7 @@ return (
         <div style={{ marginBottom: "15px" }}><strong>Name:</strong> {selectedClient.name}</div>
         <div style={{ marginBottom: "15px" }}><strong>Company:</strong> {selectedClient.company}</div>
         <div style={{ marginBottom: "15px" }}><strong>GSTIN:</strong> {selectedClient.gstin}</div>
-        <div style={{ marginBottom: "15px" }}><strong>PAN:</strong> {selectedClient.pan}</div>
+        <div style={{ marginBottom: "15px" }}><strong>PAN:</strong> {selectedClient.pan || "—"}</div>
         <div style={{ marginBottom: "20px" }}><strong>Mobile:</strong> {selectedClient.mobile}</div>
         <div style={{ display: "flex", justifyContent: "center", gap: "10px", flexWrap: "wrap" }}>
           <button style={{ background: "#6D4AFF" }}>
@@ -14577,6 +14559,16 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
   const [selectedGrowthPoint, setSelectedGrowthPoint] = useState(null);
   const [selectedFilingItem, setSelectedFilingItem] = useState(null);
 
+  // Server-side aggregated counts for the client cards (kept in sync via clients/stats/)
+  const [clientStats, setClientStats] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchClientStats()
+      .then((data) => { if (!cancelled) setClientStats(data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   const [importantLinks, setImportantLinks] = useState([]);
   const [importantPortals, setImportantPortals] = useState([]);
   useEffect(() => {
@@ -14646,10 +14638,19 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
   const inactiveCount = allClients.filter(c => c.status === "inactive").length;
 
   const thisMonthKey = new Date().toISOString().slice(0, 7);
-  const addedThisMonth = (c) => (c.registrationDate || "").startsWith(thisMonthKey);
+  const addedThisMonth = (c) => (c.reg_date || c.registrationDate || "").startsWith(thisMonthKey);
   const totalThisMonth = allClients.filter(addedThisMonth).length;
   const activeThisMonth = allClients.filter(c => c.status === "active" && addedThisMonth(c)).length;
   const inactiveThisMonth = allClients.filter(c => c.status === "inactive" && addedThisMonth(c)).length;
+
+  // Card numbers come from the backend aggregation API; local counts are the fallback
+  const s = clientStats || {};
+  const cardTotal = s.total ?? allClients.length;
+  const cardActive = s.active ?? activeCount;
+  const cardInactive = s.inactive ?? inactiveCount;
+  const cardTotalNew = s.total_new_this_month ?? totalThisMonth;
+  const cardActiveNew = s.active_new_this_month ?? activeThisMonth;
+  const cardInactiveNew = s.inactive_new_this_month ?? inactiveThisMonth;
 
   const noticesData = [
     { id: 1, client: "National Grafics & Signage", type: "SCN", typeColor: "#ef4444", typeBg: "#fef2f2", date: "12 Apr 2026", amount: "₹45,200", borderColor: "#ef4444" },
@@ -14763,9 +14764,9 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
   <HiUserGroup style={{ color:"#6366f1", fontSize:"1.1rem" }} />
 </div>
             <div>
-              <div style={{ fontSize:"1.35rem", fontWeight:900, color:"#0f172a", lineHeight:1 }}>{allClients.length}</div>
+              <div style={{ fontSize:"1.35rem", fontWeight:900, color:"#0f172a", lineHeight:1 }}>{cardTotal}</div>
               <div style={{ fontSize:"0.68rem", color:"#64748b", fontWeight:600, marginTop:"2px" }}>Total Clients</div>
-              <div style={{ margin: 0, fontSize: "0.60rem", color: "#6D4AFF", fontWeight: 700, marginTop: "2px" }}>+{totalThisMonth} this month</div>
+              <div style={{ margin: 0, fontSize: "0.60rem", color: "#6D4AFF", fontWeight: 700, marginTop: "2px" }}>+{cardTotalNew} this month</div>
             </div>
           </div>
         </div>
@@ -14786,10 +14787,10 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
   <span style={{ fontSize:"1.15rem" }}>🟢</span>
 </div>
             <div>
-              <div style={{ fontSize:"1.35rem", fontWeight:900, color:"#0f172a", lineHeight:1 }}>{activeCount}</div>
+              <div style={{ fontSize:"1.35rem", fontWeight:900, color:"#0f172a", lineHeight:1 }}>{cardActive}</div>
               <div style={{ fontSize:"0.68rem", color:"#64748b", fontWeight:600, marginTop:"2px" }}>Active Clients</div>
               <div style={{ fontSize:"0.60rem", color:"#22c55e", fontWeight:700, marginTop:"2px", display:"flex", alignItems:"center", gap:"3px" }}>
-                <span style={{ width:"5px", height:"5px", borderRadius:"50%", background:"#22c55e", display:"inline-block", animation:"blink 1.2s infinite" }}/>+{activeThisMonth} this month
+                <span style={{ width:"5px", height:"5px", borderRadius:"50%", background:"#22c55e", display:"inline-block", animation:"blink 1.2s infinite" }}/>+{cardActiveNew} this month
               </div>
             </div>
           </div>
@@ -14811,9 +14812,9 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
   <span style={{ fontSize:"1.1rem" }}>🚫</span>
             </div>
             <div>
-              <div style={{ fontSize:"1.35rem", fontWeight:900, color:"#0f172a", lineHeight:1 }}>{inactiveCount}</div>
+              <div style={{ fontSize:"1.35rem", fontWeight:900, color:"#0f172a", lineHeight:1 }}>{cardInactive}</div>
               <div style={{ fontSize:"0.68rem", color:"#64748b", fontWeight:600, marginTop:"2px" }}>Inactive Clients</div>
-              <div style={{ fontSize:"0.60rem", color:"#f59e0b", fontWeight:700, marginTop:"2px" }}>+{inactiveThisMonth} this month</div>
+              <div style={{ fontSize:"0.60rem", color:"#f59e0b", fontWeight:700, marginTop:"2px" }}>+{cardInactiveNew} this month</div>
             </div>
           </div>
         </div>
