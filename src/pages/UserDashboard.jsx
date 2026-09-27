@@ -19,7 +19,8 @@ import { FaChevronLeft, FaChevronRight } from "react-icons/fa";
 import NewsAndUpdates from './NewsAndUpdates';
 import useNotificationSocket from "../hooks/useNotificationSocket";
 
-import { fetchClients, createClient, verifyGstin, gstFilingStatus, fetchNotificationPreferences, updateNotificationPreferences, fetchPlans, fetchMySubscription, selectPlan, fetchPayments, fetchNotifications, markNotificationsRead, markAllNotificationsRead, fetchDashboardLinks } from "../api/services";
+import { fetchClients, gstFilingStatus, fetchNotificationPreferences, updateNotificationPreferences, fetchPlans, fetchMySubscription, selectPlan, fetchPayments, fetchNotifications, markNotificationsRead, markAllNotificationsRead, fetchDashboardLinks } from "../api/services";
+import AddClientModal from "../components/AddClientModal";
 
 let dashboardLinksPromise = null;
 function loadDashboardLinksOnce() {
@@ -2254,22 +2255,7 @@ const YourReturnsComponent = () => {
     { id: 6, clientName: "Client F", company: "Company 6", gstin: "27AAACC1006Z6", pan: "ABCDE1239K", mobile: "9876543215", amount: "₹0.6 Cr" },
     { id: 7, clientName: "Client G", company: "Company 7", gstin: "27AAACC1007Z7", pan: "ABCDE1240L", mobile: "9876543216", amount: "₹0.7 Cr" },
   ];
-  const defaultClients = Array.from({ length: 25 }, (_, i) => ({
-    id: i + 1,
-    name: `Client ${i + 1}`,
-    company: `Company ${i + 1} Pvt Ltd`,
-    gstin: `27AAACC${1000 + i}Z${i % 10}`,
-    pan: `ABCDE${1234 + i}F`,
-    mobile: `98765${String(i + 1).padStart(5, "0")}`,
-    aadhaar: `1234-5678-${String(i + 1).padStart(4, "0")}`,
-    address: `Address Line ${i + 1}, City`,
-    pincode: `4000${i + 1}`,
-    email: `client${i + 1}@example.com`,
-    state: "Maharashtra",
-    registrationType: i % 3 === 0 ? "Composition" : "Regular",
-    status: i % 5 === 0 ? "inactive" : "active",
-    registrationDate: `202${(i % 5) + 1}-0${(i % 9) + 1}-01`,
-  }));
+  const defaultClients = []; // Static demo data removed — real clients load from backend/localStorage
 
   const [allClients, setAllClients] = useState(() => {
     try {
@@ -2333,107 +2319,24 @@ const YourReturnsComponent = () => {
     try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(clients)); } catch {}
   };
 
-  // ── Unified Add Client Modal state (shared across all modals) ──
+  // ── Shared Add Client modal (dashboard page + clients page; form logic lives in AddClientModal) ──
   const [showAddClientModal, setShowAddClientModal] = useState(false);
-  const [addClientSource, setAddClientSource] = useState("dashboard"); // "dashboard" | "clients"
-  const [isSubmittingClient, setIsSubmittingClient] = useState(false);
-  const [gstinLookupLoading, setGstinLookupLoading] = useState(false);
-  const todayDate = new Date().toISOString().split("T")[0];
 
-  const EMPTY_CLIENT_FORM = {
-    gstin: "",
-    tradeName: "",
-    email: "",
-    legalName: "",
-    mobile: "",
-    pan: "",
-    address: "",
-    city: "",
-    pincode: "",
-    state: "",
-    taxpayerType: "",
-    registrationDate: todayDate,
-  };
-  const [newClientForm, setNewClientForm] = useState(EMPTY_CLIENT_FORM);
-
-  // ── GSTIN lookup: live GSTN (Vanaya) via Django backend, with local fallback ──
-  const handleGSTINLookup = () => {
-    const gstin = newClientForm.gstin.trim().toUpperCase();
-    if (gstin.length !== 15) {
-      toast.error("GSTIN 15 characters ka hona chahiye lookup ke liye!");
-      return;
-    }
-    const stateMap = {
-      "01": "Jammu & Kashmir", "02": "Himachal Pradesh", "03": "Punjab",
-      "04": "Chandigarh", "05": "Uttarakhand", "06": "Haryana",
-      "07": "Delhi", "08": "Rajasthan", "09": "Uttar Pradesh",
-      "10": "Bihar", "11": "Sikkim", "12": "Arunachal Pradesh",
-      "13": "Nagaland", "14": "Manipur", "15": "Mizoram",
-      "16": "Tripura", "17": "Meghalaya", "18": "Assam",
-      "19": "West Bengal", "20": "Jharkhand", "21": "Odisha",
-      "22": "Chhattisgarh", "23": "Madhya Pradesh", "24": "Gujarat",
-      "25": "Daman & Diu", "26": "Dadra & Nagar Haveli", "27": "Maharashtra",
-      "28": "Andhra Pradesh", "29": "Karnataka", "30": "Goa",
-      "31": "Lakshadweep", "32": "Kerala", "33": "Tamil Nadu",
-      "34": "Puducherry", "35": "Andaman & Nicobar Islands", "36": "Telangana",
-      "37": "Andhra Pradesh (New)", "38": "Ladakh",
-    };
-    const derive = () => {
-      const stateCode = gstin.substring(0, 2);
-      return {
-        pan: gstin.substring(2, 12),
-        state: stateMap[stateCode] || "",
-      };
-    };
-    setGstinLookupLoading(true);
-    verifyGstin(gstin)
-      .then(({ data }) => {
-        if (!data.success) throw new Error(data.detail || "GSTIN not found");
-        const { pan, state } = derive();
-        setNewClientForm(prev => ({
-          ...prev,
-          gstin: gstin,
-          pan: data.pan || pan,
-          state: data.state || state,
-          legalName: data.company_name || data.name || prev.legalName,
-          tradeName: data.trade_name || data.company_name || prev.tradeName,
-          address: data.address || prev.address,
-          taxpayerType: prev.taxpayerType || "Regular",
-        }));
-        toast.success("GSTIN verified from live GSTN (Vanaya)! Remaining fields fill kar lein.");
-      })
-      .catch(() => {
-        const { pan, state } = derive();
-        setNewClientForm(prev => ({
-          ...prev,
-          gstin: gstin,
-          pan: pan,
-          state: state,
-          legalName: prev.legalName || "",
-          tradeName: prev.tradeName || "",
-          taxpayerType: prev.taxpayerType || "Regular",
-        }));
-        toast.warn("Live lookup unavailable – GSTIN data guessed locally.");
-      })
-      .finally(() => setGstinLookupLoading(false));
-  };
-
-  const handleNewClientFormChange = (e) => {
-    const { name, value } = e.target;
-    setNewClientForm(prev => ({ ...prev, [name]: value }));
-  };
-
-  const openAddClientModal = (source = "dashboard") => {
-    setAddClientSource(source);
-    setNewClientForm(EMPTY_CLIENT_FORM);
+  const openAddClientModal = () => {
     setShowAddClientModal(true);
   };
 
   const closeAddClientModal = () => {
     setShowAddClientModal(false);
-    setNewClientForm(EMPTY_CLIENT_FORM);
-    setIsSubmittingClient(false);
-    setGstinLookupLoading(false);
+  };
+
+  const clientLimitError = () => {
+    if (planClientsLimit === null) return null;
+    const used = allClients.filter(c => c.status === "active").length;
+    if (used >= planClientsLimit) {
+      return `Client limit reached (${used}/${planClientsLimit}). Upgrade your plan to add more clients.`;
+    }
+    return null;
   };
  
 const addClient = useCallback((newClient) => {
@@ -2455,66 +2358,7 @@ const addClient = useCallback((newClient) => {
     return updated;
   });
 }, []);
-  const submitNewClient = () => {
-    const gstin = newClientForm.gstin.trim().toUpperCase();
-    const mobile = newClientForm.mobile.trim();
-    const tradeName = newClientForm.tradeName.trim();
-    const legalName = newClientForm.legalName.trim();
-    if (!gstin) { toast.error("GSTIN required hai!"); return; }
-    if (gstin.length !== 15) { toast.error("GSTIN 15 characters ka hona chahiye!"); return; }
-    if (!mobile) { toast.error("Mobile number required hai!"); return; }
-    if (!/^\d{10}$/.test(mobile)) { toast.error("Mobile 10 digits ka hona chahiye!"); return; }
-    if (!tradeName && !legalName) { toast.error("Trade Name ya Legal Name required hai!"); return; }
-
-    if (planClientsLimit !== null) {
-      const used = allClients.filter(c => c.status === "active").length;
-      if (used >= planClientsLimit) {
-        toast.error(`Client limit reached (${used}/${planClientsLimit}). Upgrade your plan to add more clients.`);
-        navigate("/user/settings?tab=billing");
-        return;
-      }
-    }
-
-    setIsSubmittingClient(true);
-    setTimeout(() => {
-      const displayName = tradeName || legalName;
-      addClient({
-        name: displayName,
-        company: displayName,
-        gstin: gstin,
-        tradeName: tradeName,
-        legalName: legalName,
-        email: newClientForm.email.trim(),
-        mobile: mobile,
-        pan: newClientForm.pan.trim().toUpperCase(),
-        address: newClientForm.address.trim(),
-        city: newClientForm.city.trim(),
-        pincode: newClientForm.pincode.trim(),
-        state: newClientForm.state.trim(),
-        taxpayerType: newClientForm.taxpayerType,
-        registrationDate: newClientForm.registrationDate || todayDate,
-        registrationType: newClientForm.taxpayerType || "Regular",
-        status: "active",
-      });
-      // Persist the new client on the Django backend (best effort)
-      try {
-        createClient({
-          name: displayName,
-          gstin: gstin,
-          mobile: mobile,
-          email: newClientForm.email.trim(),
-          state: newClientForm.state.trim(),
-          address: newClientForm.address.trim(),
-          notes: newClientForm.notes || "",
-        });
-      } catch (e) {}
-      toast.success("Client successfully added!");
-      closeAddClientModal();
-      setIsSubmittingClient(false);
-      navigate("/user/clients");
-    }, 700);
-  };
-const handleClientSelect = () => {
+  const handleClientSelect = () => {
   if (!popupShownOnce) {
     setShowReturnsPopup(true);
     setPopupShownOnce(true);
@@ -14801,6 +14645,12 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
   const activeCount = allClients.filter(c => c.status === "active").length;
   const inactiveCount = allClients.filter(c => c.status === "inactive").length;
 
+  const thisMonthKey = new Date().toISOString().slice(0, 7);
+  const addedThisMonth = (c) => (c.registrationDate || "").startsWith(thisMonthKey);
+  const totalThisMonth = allClients.filter(addedThisMonth).length;
+  const activeThisMonth = allClients.filter(c => c.status === "active" && addedThisMonth(c)).length;
+  const inactiveThisMonth = allClients.filter(c => c.status === "inactive" && addedThisMonth(c)).length;
+
   const noticesData = [
     { id: 1, client: "National Grafics & Signage", type: "SCN", typeColor: "#ef4444", typeBg: "#fef2f2", date: "12 Apr 2026", amount: "₹45,200", borderColor: "#ef4444" },
     { id: 2, client: "Bismi Enterprises", type: "DRC-01", typeColor: "#f59e0b", typeBg: "#fffbeb", date: "05 Apr 2026", amount: "₹18,750", borderColor: "#f59e0b" },
@@ -14915,7 +14765,7 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
             <div>
               <div style={{ fontSize:"1.35rem", fontWeight:900, color:"#0f172a", lineHeight:1 }}>{allClients.length}</div>
               <div style={{ fontSize:"0.68rem", color:"#64748b", fontWeight:600, marginTop:"2px" }}>Total Clients</div>
-              <div style={{ fontSize:"0.60rem", color:"#6D4AFF", fontWeight:700, marginTop:"2px" }}>+10 this month</div>
+              <div style={{ margin: 0, fontSize: "0.60rem", color: "#6D4AFF", fontWeight: 700, marginTop: "2px" }}>+{totalThisMonth} this month</div>
             </div>
           </div>
         </div>
@@ -14939,7 +14789,7 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
               <div style={{ fontSize:"1.35rem", fontWeight:900, color:"#0f172a", lineHeight:1 }}>{activeCount}</div>
               <div style={{ fontSize:"0.68rem", color:"#64748b", fontWeight:600, marginTop:"2px" }}>Active Clients</div>
               <div style={{ fontSize:"0.60rem", color:"#22c55e", fontWeight:700, marginTop:"2px", display:"flex", alignItems:"center", gap:"3px" }}>
-                <span style={{ width:"5px", height:"5px", borderRadius:"50%", background:"#22c55e", display:"inline-block", animation:"blink 1.2s infinite" }}/>+8 this month
+                <span style={{ width:"5px", height:"5px", borderRadius:"50%", background:"#22c55e", display:"inline-block", animation:"blink 1.2s infinite" }}/>+{activeThisMonth} this month
               </div>
             </div>
           </div>
@@ -14963,7 +14813,7 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
             <div>
               <div style={{ fontSize:"1.35rem", fontWeight:900, color:"#0f172a", lineHeight:1 }}>{inactiveCount}</div>
               <div style={{ fontSize:"0.68rem", color:"#64748b", fontWeight:600, marginTop:"2px" }}>Inactive Clients</div>
-              <div style={{ fontSize:"0.60rem", color:"#f59e0b", fontWeight:700, marginTop:"2px" }}>+2 this month</div>
+              <div style={{ fontSize:"0.60rem", color:"#f59e0b", fontWeight:700, marginTop:"2px" }}>+{inactiveThisMonth} this month</div>
             </div>
           </div>
         </div>
@@ -19325,368 +19175,16 @@ useEffect(() => {
 
 {/* ══ UNIFIED ADD CLIENT MODAL — shared across Dashboard & My Clients ══ */}
 {showAddClientModal && (
-  <div
-    style={{
-      position: "fixed", inset: 0,
-      background: "rgba(15,23,42,0.68)",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      zIndex: 99999,
-      backdropFilter: "blur(3px)",
+  <AddClientModal
+    open={showAddClientModal}
+    onClose={closeAddClientModal}
+    checkLimit={clientLimitError}
+    onLimitReached={() => navigate("/user/settings?tab=billing")}
+    onSaved={(client) => {
+      addClient(client);
+      navigate("/user/clients");
     }}
-    onClick={closeAddClientModal}
-  >
-    <div
-      style={{
-        background: "#fff",
-        borderRadius: "20px",
-        width: "94%",
-        maxWidth: "860px",
-        maxHeight: "92vh",
-        overflowY: "auto",
-        boxShadow: "0 8px 0 #b8c4e8, 0 24px 72px rgba(15,23,42,0.28)",
-        animation: "scaleIn 0.18s ease",
-      }}
-      onClick={(e) => e.stopPropagation()}
-    >
-      {/* Modal Header */}
-      <div style={{
-        background: "#fff",
-        padding: "16px 28px 14px",
-        borderBottom: "1px solid #e8edf5",
-        borderRadius: "20px 20px 0 0",
-        textAlign: "center",
-        boxShadow: "0 4px 12px rgba(107,114,128,0.08), inset 0 1px 0 rgba(255,255,255,1)",
-        position: "sticky", top: 0, zIndex: 2,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ width: "32px" }} />
-          <div>
-            <h2 style={{ margin: 0, fontSize: "1.28rem", fontWeight: 800, color: "#3730a3" }}>
-              ➕ Add New Client
-            </h2>
-            <p style={{ margin: "3px 0 0", fontSize: "0.80rem", color: "#f97316", fontWeight: 600 }}>
-              Client will be added with Active status • Fills automatically on GSTIN lookup
-            </p>
-          </div>
-          <button
-            onClick={closeAddClientModal}
-            style={{
-              width: "32px", height: "32px", borderRadius: "8px",
-              border: "1px solid #e2e8f0", background: "#f8fafc",
-              cursor: "pointer", display: "flex", alignItems: "center",
-              justifyContent: "center", fontSize: "1rem", color: "#64748b",
-              fontWeight: 700, flexShrink: 0,
-            }}
-          >✕</button>
-        </div>
-      </div>
-
-      {/* Modal Body */}
-      <div style={{ padding: "20px 28px 24px" }}>
-
-        {/* Row 1: GSTIN + Get Data button (full width) */}
-        <div style={{ marginBottom: "16px" }}>
-          <label style={{ fontWeight: 700, display: "block", marginBottom: "6px", fontSize: "0.82rem", color: "#334155", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-            GSTIN <span style={{ color: "#ef4444" }}>*</span>
-          </label>
-          <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-            <input
-              name="gstin"
-              value={newClientForm.gstin}
-              onChange={handleNewClientFormChange}
-              maxLength={15}
-              placeholder="e.g. 27AAPFU0939F1ZV"
-              style={{
-                flex: 1, padding: "11px 14px",
-                borderRadius: "10px", border: "1.5px solid #d1d5db",
-                fontSize: "0.90rem", background: "#f9fafb",
-                fontFamily: "monospace", fontWeight: 600,
-                letterSpacing: "0.04em", boxSizing: "border-box",
-                transition: "border 0.15s", textTransform: "uppercase",
-              }}
-              onFocus={(e) => (e.target.style.border = "1.5px solid #4f46e5")}
-              onBlur={(e) => (e.target.style.border = "1.5px solid #d1d5db")}
-            />
-            <button
-              onClick={handleGSTINLookup}
-              disabled={gstinLookupLoading}
-              style={{
-                padding: "11px 22px",
-                background: gstinLookupLoading
-                  ? "linear-gradient(135deg, #94a3b8, #64748b)"
-                  : "linear-gradient(135deg, #0891b2, #0e7490)",
-                color: "#fff", border: "none", borderRadius: "10px",
-                fontWeight: 700, fontSize: "0.85rem", cursor: gstinLookupLoading ? "not-allowed" : "pointer",
-                whiteSpace: "nowrap",
-                boxShadow: "0 4px 12px rgba(8,145,178,0.28)",
-                transition: "all 0.18s",
-                display: "flex", alignItems: "center", gap: "7px",
-              }}
-            >
-              {gstinLookupLoading ? (
-                <>
-                  <span style={{
-                    width: "14px", height: "14px", border: "2px solid rgba(255,255,255,0.4)",
-                    borderTop: "2px solid #fff", borderRadius: "50%",
-                    display: "inline-block", animation: "spin 0.7s linear infinite",
-                  }} />
-                  Fetching…
-                </>
-              ) : "🔍 Get Data"}
-            </button>
-          </div>
-          <div style={{ marginTop: "5px", fontSize: "0.75rem", color: "#64748b" }}>
-            Enter 15-digit GSTIN and click "Get Data" to auto-fill taxpayer details
-          </div>
-        </div>
-
-        {/* Grid: 2 columns for rest of fields */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-
-          {/* Trade Name */}
-          <div>
-            <label style={{ fontWeight: 700, display: "block", marginBottom: "6px", fontSize: "0.82rem", color: "#334155", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-              Trade Name <span style={{ color: "#ef4444" }}>*</span>
-            </label>
-            <input
-              name="tradeName"
-              value={newClientForm.tradeName}
-              onChange={handleNewClientFormChange}
-              placeholder="e.g. Raj Traders"
-              style={{ width: "100%", padding: "11px 13px", borderRadius: "10px", border: "1.5px solid #d1d5db", fontSize: "0.88rem", background: "#f9fafb", boxSizing: "border-box", transition: "border 0.15s" }}
-              onFocus={(e) => (e.target.style.border = "1.5px solid #4f46e5")}
-              onBlur={(e) => (e.target.style.border = "1.5px solid #d1d5db")}
-            />
-          </div>
-
-          {/* Legal Name */}
-          <div>
-            <label style={{ fontWeight: 700, display: "block", marginBottom: "6px", fontSize: "0.82rem", color: "#334155", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-              Legal Name
-            </label>
-            <input
-              name="legalName"
-              value={newClientForm.legalName}
-              onChange={handleNewClientFormChange}
-              placeholder="e.g. Raj Enterprises Pvt Ltd"
-              style={{ width: "100%", padding: "11px 13px", borderRadius: "10px", border: "1.5px solid #d1d5db", fontSize: "0.88rem", background: "#f9fafb", boxSizing: "border-box", transition: "border 0.15s" }}
-              onFocus={(e) => (e.target.style.border = "1.5px solid #4f46e5")}
-              onBlur={(e) => (e.target.style.border = "1.5px solid #d1d5db")}
-            />
-          </div>
-
-          {/* Email */}
-          <div>
-            <label style={{ fontWeight: 700, display: "block", marginBottom: "6px", fontSize: "0.82rem", color: "#334155", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-              Email ID
-            </label>
-            <input
-              name="email"
-              value={newClientForm.email}
-              onChange={handleNewClientFormChange}
-              type="email"
-              placeholder="e.g. raj@company.com"
-              style={{ width: "100%", padding: "11px 13px", borderRadius: "10px", border: "1.5px solid #d1d5db", fontSize: "0.88rem", background: "#f9fafb", boxSizing: "border-box", transition: "border 0.15s" }}
-              onFocus={(e) => (e.target.style.border = "1.5px solid #4f46e5")}
-              onBlur={(e) => (e.target.style.border = "1.5px solid #d1d5db")}
-            />
-          </div>
-
-          {/* Mobile */}
-          <div>
-            <label style={{ fontWeight: 700, display: "block", marginBottom: "6px", fontSize: "0.82rem", color: "#334155", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-              Mobile Number <span style={{ color: "#ef4444" }}>*</span>
-            </label>
-            <input
-              name="mobile"
-              value={newClientForm.mobile}
-              onChange={handleNewClientFormChange}
-              maxLength={10}
-              placeholder="10-digit mobile"
-              style={{ width: "100%", padding: "11px 13px", borderRadius: "10px", border: "1.5px solid #d1d5db", fontSize: "0.88rem", background: "#f9fafb", boxSizing: "border-box", transition: "border 0.15s" }}
-              onFocus={(e) => (e.target.style.border = "1.5px solid #4f46e5")}
-              onBlur={(e) => (e.target.style.border = "1.5px solid #d1d5db")}
-            />
-          </div>
-
-          {/* PAN */}
-          <div>
-            <label style={{ fontWeight: 700, display: "block", marginBottom: "6px", fontSize: "0.82rem", color: "#334155", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-              PAN
-            </label>
-            <input
-              name="pan"
-              value={newClientForm.pan}
-              onChange={handleNewClientFormChange}
-              maxLength={10}
-              placeholder="Auto-filled from GSTIN"
-              style={{ width: "100%", padding: "11px 13px", borderRadius: "10px", border: "1.5px solid #d1d5db", fontSize: "0.88rem", background: "#f9fafb", boxSizing: "border-box", transition: "border 0.15s", fontFamily: "monospace", fontWeight: 600, textTransform: "uppercase" }}
-              onFocus={(e) => (e.target.style.border = "1.5px solid #4f46e5")}
-              onBlur={(e) => (e.target.style.border = "1.5px solid #d1d5db")}
-            />
-          </div>
-
-          {/* Type of Taxpayer */}
-          <div>
-            <label style={{ fontWeight: 700, display: "block", marginBottom: "6px", fontSize: "0.82rem", color: "#334155", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-              Type of Taxpayer
-            </label>
-            <select
-              name="taxpayerType"
-              value={newClientForm.taxpayerType}
-              onChange={handleNewClientFormChange}
-              style={{
-                width: "100%", padding: "11px 13px", borderRadius: "10px",
-                border: "1.5px solid #d1d5db", fontSize: "0.88rem",
-                background: "#f9fafb", boxSizing: "border-box",
-                transition: "border 0.15s", color: "#1e293b",
-                appearance: "auto",
-              }}
-              onFocus={(e) => (e.target.style.border = "1.5px solid #4f46e5")}
-              onBlur={(e) => (e.target.style.border = "1.5px solid #d1d5db")}
-            >
-              <option value="">Select type…</option>
-              <option value="Regular">Regular</option>
-              <option value="Composition">Composition</option>
-              <option value="SEZ Unit">SEZ Unit</option>
-              <option value="SEZ Developer">SEZ Developer</option>
-              <option value="Casual Taxable Person">Casual Taxable Person</option>
-              <option value="Non-Resident Taxable Person">Non-Resident Taxable Person</option>
-              <option value="ISD">ISD (Input Service Distributor)</option>
-              <option value="TDS Deductor">TDS Deductor</option>
-              <option value="TCS Collector">TCS Collector</option>
-              <option value="UIN Holder">UIN Holder</option>
-            </select>
-          </div>
-
-          {/* Address (full width) */}
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={{ fontWeight: 700, display: "block", marginBottom: "6px", fontSize: "0.82rem", color: "#334155", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-              Address
-            </label>
-            <input
-              name="address"
-              value={newClientForm.address}
-              onChange={handleNewClientFormChange}
-              placeholder="Street / Building / Area"
-              style={{ width: "100%", padding: "11px 13px", borderRadius: "10px", border: "1.5px solid #d1d5db", fontSize: "0.88rem", background: "#f9fafb", boxSizing: "border-box", transition: "border 0.15s" }}
-              onFocus={(e) => (e.target.style.border = "1.5px solid #4f46e5")}
-              onBlur={(e) => (e.target.style.border = "1.5px solid #d1d5db")}
-            />
-          </div>
-
-          {/* City */}
-          <div>
-            <label style={{ fontWeight: 700, display: "block", marginBottom: "6px", fontSize: "0.82rem", color: "#334155", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-              City
-            </label>
-            <input
-              name="city"
-              value={newClientForm.city}
-              onChange={handleNewClientFormChange}
-              placeholder="e.g. Mumbai"
-              style={{ width: "100%", padding: "11px 13px", borderRadius: "10px", border: "1.5px solid #d1d5db", fontSize: "0.88rem", background: "#f9fafb", boxSizing: "border-box", transition: "border 0.15s" }}
-              onFocus={(e) => (e.target.style.border = "1.5px solid #4f46e5")}
-              onBlur={(e) => (e.target.style.border = "1.5px solid #d1d5db")}
-            />
-          </div>
-
-          {/* PIN Code */}
-          <div>
-            <label style={{ fontWeight: 700, display: "block", marginBottom: "6px", fontSize: "0.82rem", color: "#334155", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-              PIN Code
-            </label>
-            <input
-              name="pincode"
-              value={newClientForm.pincode}
-              onChange={handleNewClientFormChange}
-              maxLength={6}
-              placeholder="6-digit PIN"
-              style={{ width: "100%", padding: "11px 13px", borderRadius: "10px", border: "1.5px solid #d1d5db", fontSize: "0.88rem", background: "#f9fafb", boxSizing: "border-box", transition: "border 0.15s" }}
-              onFocus={(e) => (e.target.style.border = "1.5px solid #4f46e5")}
-              onBlur={(e) => (e.target.style.border = "1.5px solid #d1d5db")}
-            />
-          </div>
-
-          {/* State */}
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={{ fontWeight: 700, display: "block", marginBottom: "6px", fontSize: "0.82rem", color: "#334155", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-              State
-            </label>
-            <select
-              name="state"
-              value={newClientForm.state}
-              onChange={handleNewClientFormChange}
-              style={{
-                width: "100%", padding: "11px 13px", borderRadius: "10px",
-                border: "1.5px solid #d1d5db", fontSize: "0.88rem",
-                background: "#f9fafb", boxSizing: "border-box",
-                transition: "border 0.15s", color: "#1e293b",
-              }}
-              onFocus={(e) => (e.target.style.border = "1.5px solid #4f46e5")}
-              onBlur={(e) => (e.target.style.border = "1.5px solid #d1d5db")}
-            >
-              <option value="">Select State…</option>
-              {[
-                "Andaman & Nicobar Islands","Andhra Pradesh","Andhra Pradesh (New)","Arunachal Pradesh",
-                "Assam","Bihar","Chandigarh","Chhattisgarh","Dadra & Nagar Haveli","Daman & Diu",
-                "Delhi","Goa","Gujarat","Haryana","Himachal Pradesh","Jammu & Kashmir","Jharkhand",
-                "Karnataka","Kerala","Ladakh","Lakshadweep","Madhya Pradesh","Maharashtra","Manipur",
-                "Meghalaya","Mizoram","Nagaland","Odisha","Puducherry","Punjab","Rajasthan","Sikkim",
-                "Tamil Nadu","Telangana","Tripura","Uttar Pradesh","Uttarakhand","West Bengal",
-              ].map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
-
-        </div>
-
-        {/* Action Buttons */}
-        <div style={{ marginTop: "22px", display: "flex", gap: "12px", justifyContent: "flex-end", alignItems: "center" }}>
-          <button
-            onClick={closeAddClientModal}
-            style={{
-              padding: "11px 24px", background: "#f1f5f9",
-              border: "1.5px solid #e2e8f0", borderRadius: "10px",
-              cursor: "pointer", fontWeight: 700, fontSize: "0.88rem",
-              color: "#475569", transition: "all 0.15s",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "#e2e8f0"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "#f1f5f9"; }}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={submitNewClient}
-            disabled={isSubmittingClient}
-            style={{
-              padding: "11px 40px",
-              background: isSubmittingClient
-                ? "linear-gradient(135deg, #94a3b8, #64748b)"
-                : "linear-gradient(135deg, #1f2a70, #3b4cc0)",
-              color: "white", border: "none", borderRadius: "10px",
-              fontWeight: 800, cursor: isSubmittingClient ? "not-allowed" : "pointer",
-              boxShadow: isSubmittingClient ? "none" : "0 6px 18px rgba(31,42,112,0.32)",
-              fontSize: "0.92rem", display: "flex", alignItems: "center", gap: "8px",
-              transition: "all 0.18s",
-            }}
-          >
-            {isSubmittingClient ? (
-              <>
-                <span style={{
-                  width: "15px", height: "15px", border: "2px solid rgba(255,255,255,0.4)",
-                  borderTop: "2px solid #fff", borderRadius: "50%",
-                  display: "inline-block", animation: "spin 0.7s linear infinite",
-                }} />
-                Adding Client…
-              </>
-            ) : "✓ Submit Client"}
-          </button>
-        </div>
-
-      </div>
-    </div>
-  </div>
-)}
+  />)}
 
     </>
   );
