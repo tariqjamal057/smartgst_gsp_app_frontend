@@ -115,6 +115,8 @@ export default function AddClientModal({
           legalName: data.company_name || data.name || prev.legalName,
           tradeName: data.trade_name || data.company_name || prev.tradeName,
           address: data.address || prev.address,
+          city: data.city || prev.city,
+          pincode: data.pincode || prev.pincode,
           taxpayerType: prev.taxpayerType || "Regular",
         }));
         toast.success("GSTIN verified from live GSTN (Vanaya)! Remaining fields fill kar lein.");

@@ -18,10 +18,22 @@ const errText = (e) =>
   "Request failed";
 
 
-const FINANCIAL_YEARS = [
-  "2025-26","2024-25","2023-24","2022-23","2021-22",
-  "2020-21","2019-20","2018-19","2017-18"
-];
+const currentFYLabel = () => {
+  const now = new Date();
+  const y = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  return `${y}-${String(y + 1).slice(-2)}`;
+};
+// GST started in 2017-18; list everything up to the current running FY (April–March)
+const FINANCIAL_YEARS = (() => {
+  const startYear = 2017;
+  const now = new Date();
+  const endYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  const count = Math.max(endYear - startYear + 1, 1);
+  return Array.from({ length: count }, (_, i) => {
+    const y = endYear - i;
+    return `${y}-${String(y + 1).slice(-2)}`;
+  });
+})();
 
 const outstandingDemands = [
   { sr: 1, date: "20/02/2026", demandId: "ZD090126214512Q", integrated: 0, central: 50620, state: 50620, cess: 0, total: 101240 },
@@ -995,8 +1007,8 @@ export default function GSTDashboard({ initialSection }) {
     });
     return () => cancelAnimationFrame(raf1);
   }); // intentionally no dependency array — the ref guard prevents repeated execution
-  const [selectedFY, setSelectedFY] = useState("2025-26");
-  const [activeFY, setActiveFY]     = useState("2025-26");
+  const [selectedFY, setSelectedFY] = useState(() => currentFYLabel());
+  const [activeFY, setActiveFY]     = useState(() => currentFYLabel());
   const [updating, setUpdating]     = useState(false);
   const [gstnStatus, setGstnStatus] = useState("disconnected");
   const [filedCounts, setFiledCounts] = useState({});
@@ -1030,7 +1042,7 @@ export default function GSTDashboard({ initialSection }) {
         const first = list.find((c) => c.connected) || list[0];
         if (first) {
           setActiveGstin(first.gstin);
-          loadFiling("2025-26", first.gstin);
+          loadFiling(activeFY, first.gstin);
         } else {
           setGstnStatus("disconnected");
         }
@@ -1160,6 +1172,8 @@ export default function GSTDashboard({ initialSection }) {
 
         {/* ── RIGHT: FY + Refresh (original) ── */}
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        {/*
+          GS T N Live/Offline status pill — hidden (commented) for the static UI.
         <div
           style={{
             height: "28px", padding: "0 11px", borderRadius: "20px",
@@ -1174,6 +1188,7 @@ export default function GSTDashboard({ initialSection }) {
           <span style={{ fontSize: "0.62rem", lineHeight: 1 }}>{gstnStatus === "connected" ? "●" : "○"}</span>
           GSTN {gstnStatus === "connected" ? "Live" : "Offline"}
         </div>
+        */}
         <div style={{ height: "36px",margin:"12px", display: "flex", alignItems: "center", fontSize: "0.72rem", color: "#64748b", fontWeight: "900", letterSpacing: "0.2px", whiteSpace: "nowrap" }}>Financial Year</div>
         <FYDropdown value={selectedFY} onChange={setSelectedFY} years={FINANCIAL_YEARS} />
         <button onClick={handleUpdateAll} disabled={updating} style={{
@@ -1192,7 +1207,8 @@ export default function GSTDashboard({ initialSection }) {
 
       <div style={{ height: "10px" }} />
 
-      {/* ── GSTN Session bar (login with a credential) ── */}
+      {/*
+      ── GSTN Session bar (login with a credential) — hidden (commented) for static UI.
       <div style={{ maxWidth: "1800px", margin: "0 auto", padding: "0 16px" }}>
         <div style={{
           background: "#fff", borderRadius: "12px", border: "1px solid #e2e8f0",
@@ -1207,11 +1223,15 @@ export default function GSTDashboard({ initialSection }) {
             onChange={(e) => { setActiveGstin(e.target.value); loadFiling(activeFY, e.target.value); }}
             style={{ padding: "7px 10px", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "0.78rem", fontWeight: "600", background: "#fff", color: "#1e293b", maxWidth: "360px" }}
           >
-            {creds.map((c) => (
-              <option key={c.gstin} value={c.gstin}>
-                {c.username} · {c.gstin}{c.connected ? " · LIVE" : ""}
-              </option>
-            ))}
+            {creds.length === 0 ? (
+              <option value="">No saved sessions</option>
+            ) : (
+              creds.map((c) => (
+                <option key={c.gstin} value={c.gstin}>
+                  {c.username} · {c.gstin}{c.connected ? " · LIVE" : ""}
+                </option>
+              ))
+            )}
           </select>
           {connStep === "otp" ? (
             <>
@@ -1241,6 +1261,7 @@ export default function GSTDashboard({ initialSection }) {
           )}
         </div>
       </div>
+      */}
 
       {/* ── Row 1 ── Returns (2 cols) + Ledger (1 col) */}
       <div style={rowStyle(3, "0px", "0")}>

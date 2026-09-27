@@ -22,6 +22,24 @@ import useNotificationSocket from "../hooks/useNotificationSocket";
 import { fetchClients, fetchClientStats, gstFilingStatus, fetchNotificationPreferences, updateNotificationPreferences, fetchPlans, fetchMySubscription, selectPlan, fetchPayments, fetchNotifications, markNotificationsRead, markAllNotificationsRead, fetchDashboardLinks, updateClient as apiUpdateClient, deleteClient as apiDeleteClient } from "../api/services";
 import AddClientModal from "../components/AddClientModal";
 
+// ── Financial year helpers ─────────────────────────────────────────────
+// GST started in 2017-18; the FY list runs from 2017-18 up to the current
+// running year (April–March), and the default selection tracks it too.
+const currentFYLabel = () => {
+  const n = new Date();
+  const y = n.getMonth() >= 3 ? n.getFullYear() : n.getFullYear() - 1;
+  return `${y}-${String(y + 1).slice(-2)}`;
+};
+const gstFYList = () => {
+  const startYear = 2017;
+  const n = new Date();
+  const endYear = n.getMonth() >= 3 ? n.getFullYear() : n.getFullYear() - 1;
+  const count = Math.max(endYear - startYear + 1, 1);
+  return Array.from({ length: count }, (_, i) => endYear - i).map(
+    (y) => `${y}-${String(y + 1).slice(-2)}`
+  );
+};
+
 let dashboardLinksPromise = null;
 function loadDashboardLinksOnce() {
   if (!dashboardLinksPromise) {
@@ -187,7 +205,7 @@ function UserDashboard() {
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
   const [showGSTReturnPeriodSelection, setShowGSTReturnPeriodSelection] = useState(false);
   const [showReturnsSummary, setShowReturnsSummary] = useState(false);
-  const [selectedFY, setSelectedFY] = useState("2025-26");
+  const [selectedFY, setSelectedFY] = useState(() => currentFYLabel());
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedQuarter, setSelectedQuarter] = useState("Quarter 4 (Jan - Mar)");
   const [selectedPeriod, setSelectedPeriod] = useState("January");
@@ -2133,7 +2151,7 @@ const DetailedGSTView = ({ formType, fy, period, onBack }) => {
 const YourReturnsComponent = () => {
   const [step, setStep] = useState('selection');
   const [selectedForm, setSelectedForm] = useState(null);
-  const [selectedFY, setSelectedFY] = useState("2025-26");
+  const [selectedFY, setSelectedFY] = useState(() => currentFYLabel());
   const [selectedQuarter, setSelectedQuarter] = useState("Quarter 4 (Jan - Mar)");
   const [selectedPeriod, setSelectedPeriod] = useState("January");
 
@@ -3034,12 +3052,24 @@ const handleImportUpload = () => {
 };
   
   
+  const formatRegDate = (d) => {
+    if (!d) return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+      const [y, m, day] = d.split("-");
+      const short = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      const mi = parseInt(m, 10) - 1;
+      return mi >= 0 && mi < 12 ? `${day}-${short[mi]}-${y}` : d;
+    }
+    return d;
+  };
   const [dynamicClient, setDynamicClient] = useState({
-    gstin: client?.gstin || "09ABMCS5888A1ZU",
-    company: client?.company || "SALVIA GRAFIX PRIVATE LIMITED",
-    registrationDate: "10-Feb-2020",
-    status: "Active",
+    gstin: client?.gstin || "—",
+    company: client?.company || client?.name || "—",
+    registrationDate: formatRegDate(client?.reg_date) || "—",
+    regNo: formatRegDate(client?.reg_date) || "—",
+    status: client?.status || "active",
   });
+  const clientIsActive = (dynamicClient.status || "active").toLowerCase() === "active";
   const [selectedOptions, setSelectedOptions] = useState([]);
   const [selectAllImport, setSelectAllImport] = useState(false);
   const [skipValidation, setSkipValidation] = useState(false);
@@ -3077,8 +3107,9 @@ const handleImportUpload = () => {
     setDynamicClient({
       gstin: formData.gstin,
       company: formData.name,
-      registrationDate: formData.regDate,
-      status: "Active",
+      registrationDate: formatRegDate(formData.regDate) || dynamicClient.registrationDate,
+      regNo: formatRegDate(formData.regDate) || dynamicClient.regNo,
+      status: ["active", "inactive"].includes(formData.status) ? formData.status : "active",
     });
     toast.success("Client details updated successfully! Changes are now visible in the header card.");
   };
@@ -3535,7 +3566,7 @@ gstr3bSavedSummary: "gstr3b_saved_summary"
 
   const GSTRLayout = ({ title = "GST Returns" }) => {
     const [activeSubTab, setActiveSubTab] = useState("Manually");
-    const [selectedYear, setSelectedYear] = useState("2025-26");
+    const [selectedYear, setSelectedYear] = useState(() => currentFYLabel());
     const [selectedMonth, setSelectedMonth] = useState("");
     const [selectedSection, setSelectedSection] = useState("");
     const [selectedState, setSelectedState] = useState("");
@@ -4891,7 +4922,7 @@ useEffect(() => {
     useEffect(() => {
       localStorage.setItem(STORAGE_KEYS.interestLateFee, JSON.stringify(interestLateFee));
     }, [interestLateFee]);
-    const years = Array.from({ length: 9 }, (_, i) => 2025 - i).map(y => `${y}-${String(y + 1).slice(-2)}`);
+    const years = gstFYList();
     const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
     // GSTR-1 sections (normal case - non-amendment)
     const gstr1Sections = [
@@ -13443,9 +13474,9 @@ return (
 
             {/* Active pill */}
             <div style={{
-              background: "rgba(34,197,94,0.14)",
-              border: "1.5px solid rgba(74,222,128,0.4)",
-              color: "#4ade80",
+              background: clientIsActive ? "rgba(34,197,94,0.14)" : "rgba(245,158,11,0.14)",
+              border: clientIsActive ? "1.5px solid rgba(74,222,128,0.4)" : "1.5px solid rgba(251,191,36,0.4)",
+              color: clientIsActive ? "#4ade80" : "#fbbf24",
               padding: "7px 16px",
               borderRadius: "999px",
               fontSize: "0.75rem",
@@ -13458,12 +13489,12 @@ return (
               <span style={{
                 width: "8px", height: "8px",
                 borderRadius: "50%",
-                background: "#4ade80",
+                background: clientIsActive ? "#4ade80" : "#fbbf24",
                 display: "inline-block",
-                boxShadow: "0 0 6px #4ade80",
+                boxShadow: `0 0 6px ${clientIsActive ? "#4ade80" : "#fbbf24"}`,
                 animation: "clientBlink 1.2s infinite",
               }} />
-              ACTIVE
+              {clientIsActive ? "ACTIVE" : "INACTIVE"}
               <style>{`
                 @keyframes clientBlink {
                   0%,100% { opacity:1; }
@@ -13486,7 +13517,7 @@ return (
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
             <span style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.45)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>REG NO:</span>
-            <span style={{ fontSize: "0.76rem", color: "rgba(255,255,255,0.88)", fontWeight: 700 }}>{dynamicClient.registrationDate}</span>
+            <span style={{ fontSize: "0.76rem", color: "rgba(255,255,255,0.88)", fontWeight: 700 }}>{dynamicClient.regNo || "—"}</span>
           </div>
           <span style={{ color: "rgba(255,255,255,0.18)", margin: "0 14px", fontSize: "0.9rem" }}>|</span>
           <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
@@ -16593,7 +16624,7 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
   const GSTReturnsPage = () => {
   const [selectedReturn, setSelectedReturn] = useState("GSTR-1");
   const [filterView, setFilterView] = useState("all");
-  const [selectedFY, setSelectedFY] = useState("2025-26");
+  const [selectedFY, setSelectedFY] = useState(() => currentFYLabel());
   const [liveClients, setLiveClients] = useState(null);
   const [syncInfo, setSyncInfo] = useState("");
 
