@@ -19,7 +19,7 @@ import { FaChevronLeft, FaChevronRight } from "react-icons/fa";
 import NewsAndUpdates from './NewsAndUpdates';
 import useNotificationSocket from "../hooks/useNotificationSocket";
 
-import { fetchClients, fetchClientStats, gstFilingStatus, fetchNotificationPreferences, updateNotificationPreferences, fetchPlans, fetchMySubscription, selectPlan, fetchPayments, fetchNotifications, markNotificationsRead, markAllNotificationsRead, fetchDashboardLinks, updateClient as apiUpdateClient, deleteClient as apiDeleteClient } from "../api/services";
+import { fetchClients, fetchClientStats, gstFilingStatus, gstSearch, fetchReturnSections, saveReturnSections, gstRetSection, gstTdsTcs, gstReportSummary, gstLedger, gstRetSave, fetchNotificationPreferences, updateNotificationPreferences, fetchPlans, fetchMySubscription, selectPlan, fetchPayments, fetchNotifications, markNotificationsRead, markAllNotificationsRead, fetchDashboardLinks, updateClient as apiUpdateClient, deleteClient as apiDeleteClient, fetchReminders as apiFetchReminders, createReminder as apiCreateReminder, deleteReminder as apiDeleteReminder } from "../api/services";
 import AddClientModal from "../components/AddClientModal";
 
 // ── Financial year helpers ─────────────────────────────────────────────
@@ -3073,46 +3073,231 @@ const handleImportUpload = () => {
   const [selectedOptions, setSelectedOptions] = useState([]);
   const [selectAllImport, setSelectAllImport] = useState(false);
   const [skipValidation, setSkipValidation] = useState(false);
-  const [formData, setFormData] = useState({
-    name: "SALVIA GRAFIX PRIVATE LIMITED",
-    address: "Shop No. 13, First Floor, Royal Plaza, Haj...",
-    place: "Meerut",
-    pin: "250002",
-    state: "Uttar Pradesh",
-    mobile: "+91 7500411329",
-    email: "adv.raj7777@gmail.com",
+  const INDIAN_STATES = [
+    "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh", "Goa",
+    "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand", "Karnataka", "Kerala",
+    "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya", "Mizoram", "Nagaland",
+    "Odisha", "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu", "Telangana",
+    "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal",
+    "Andaman and Nicobar Islands", "Chandigarh", "Dadra and Nagar Haveli and Daman and Diu",
+    "Delhi", "Jammu and Kashmir", "Ladakh", "Lakshadweep", "Puducherry",
+  ];
+  const BUSINESS_TYPE_OPTIONS = [
+    "Proprietorship", "Partnership", "Private Limited", "Public Limited", "LLP",
+    "Trust / NGO", "Government", "Individual", "Others",
+  ];
+  const TAXPAYER_TYPE_OPTIONS = ["Normal", "Composition", "Regular", "SEZ"];
+  const normalizeGstnStatus = (v) =>
+    String(v || "").trim().toLowerCase() === "inactive" ? "inactive" : "active";
+  const gstnTaxpayerType = (v) => {
+    const s = String(v || "").trim().toLowerCase();
+    if (!s) return "";
+    if (s.includes("composit")) return "Composition";
+    if (s.includes("regular") || s.includes("normal")) return "Normal";
+    if (s.includes("sez")) return "SEZ";
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
+  const formatGstnDate = (v) => {
+    if (!v) return "";
+    const m = String(v).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (m) {
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const mi = parseInt(m[2], 10) - 1;
+      return mi >= 0 && mi < 12 ? `${m[1]}-${months[mi]}-${m[3]}` : v;
+    }
+    return formatRegDate(v);
+  };
+  const defaultForm = {
+    name: "",
+    address: "",
+    place: "",
+    pin: "",
+    state: "",
+    mobile: "",
+    email: "",
     phone: "",
-    tradeName: "SALVIA GRAFIX PRIVATE LIMITED",
-    businessType: "Proprietorship",
-    status: "Select",
-    gstin: "09ABMCS5888A1ZU",
-    regDate: "06-02-2024",
+    tradeName: "",
+    businessType: "Select",
+    status: "active",
+    gstin: "",
+    regDate: "",
     tan: "",
-    pan: "ABMCS5888A",
+    pan: "",
     cin: "",
     fileNo: "",
-    responsiblePerson: "VIKRAM SINGH",
+    responsiblePerson: "",
     designation: "",
     alternateMobile: "+91",
-    gstUserId: "silva.grafix",
+    gstUserId: "",
     taxPayerType: "Normal",
     uploadType: "GST",
     lutNumber: "",
+  };
+  const [formData, setFormData] = useState(() => {
+    const s = {
+      name: client?.company || client?.name || "",
+      address: client?.address || "",
+      place: client?.place || client?.city || client?.loc || "",
+      pin: client?.pin || client?.pincode || "",
+      state: client?.state || "",
+      mobile: client?.mobile || "",
+      email: client?.email || "",
+      phone: client?.phone || "",
+      tradeName: client?.trade_name || client?.company || client?.name || "",
+      businessType: client?.business_type || "Select",
+      status: normalizeGstnStatus(client?.status || "active"),
+      gstin: client?.gstin || "",
+      regDate: formatRegDate(client?.reg_date) || "",
+      tan: client?.tan || "",
+      pan: client?.pan || "",
+      cin: client?.cin || "",
+      fileNo: client?.file_no || "",
+      responsiblePerson: client?.responsible_person || "",
+      designation: client?.designation || "",
+      alternateMobile: client?.alternate_mobile || "+91",
+      gstUserId: client?.gst_user_id || client?.user_id || client?.userId || "",
+      taxPayerType: gstnTaxpayerType(client?.taxpayer_type || client?.tax_payer_type) || "Normal",
+      uploadType: client?.upload_type || "GST",
+      lutNumber: client?.lut_number || "",
+    };
+    const merged = { ...defaultForm, ...s };
+    Object.entries(s).forEach(([k, v]) => {
+      if (!v || v === "+91") merged[k] = defaultForm[k];
+    });
+    return merged;
   });
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
-  const handleUpdate = () => {
-    setDynamicClient({
-      gstin: formData.gstin,
-      company: formData.name,
-      registrationDate: formatRegDate(formData.regDate) || dynamicClient.registrationDate,
-      regNo: formatRegDate(formData.regDate) || dynamicClient.regNo,
-      status: ["active", "inactive"].includes(formData.status) ? formData.status : "active",
-    });
-    toast.success("Client details updated successfully! Changes are now visible in the header card.");
+  const [fetchingGstn, setFetchingGstn] = useState(false);
+  const handleGstnFetch = async () => {
+    const target = client?.gstin || formData.gstin;
+    if (!target) { toast.error("No GSTIN to look up."); return; }
+    setFetchingGstn(true);
+    try {
+      const res = await gstSearch(target);
+      const d = res && res.data;
+      if (d && d.success !== false) {
+        setFormData((prev) => ({
+          ...prev,
+          name: d.company_name || d.name || prev.name,
+          tradeName: d.trade_name || d.company_name || prev.tradeName,
+          address: d.address || prev.address,
+          place: d.place || d.city || prev.place,
+          pin: d.pin || d.pincode || prev.pin,
+          state: d.state || prev.state,
+          gstin: d.gstin || prev.gstin,
+          regDate: d.registration_date ? formatGstnDate(d.registration_date) : prev.regDate,
+          mobile: d.mobile || prev.mobile,
+          email: d.email || prev.email,
+          phone: d.phone || prev.phone,
+          businessType:
+            BUSINESS_TYPE_OPTIONS.find((o) => o.toLowerCase() === String(d.business_type || "").toLowerCase())
+            || d.business_type || prev.businessType,
+          taxPayerType: gstnTaxpayerType(d.taxpayer_type) || prev.taxPayerType,
+          status: normalizeGstnStatus(d.status) || prev.status,
+        }));
+        toast.success("GSTN data fetched — review & save.");
+      } else {
+        toast.error((d && d.detail) || "GSTN lookup failed.");
+      }
+    } catch (e) {
+      toast.error((e && e.response && e.response.data && (e.response.data.detail || e.response.data.message)) || "Could not reach GSTN.");
+    }
+    setFetchingGstn(false);
   };
+  const toIsoDate = (v) => {
+    if (!v) return undefined;
+    const s = String(v).trim();
+    const ddmon = s.match(/^(\d{2})-([A-Za-z]{3})-(\d{4})$/);
+    if (ddmon) {
+      const months = { Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06", Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12" };
+      const mm = months[ddmon[2]];
+      return mm ? `${ddmon[3]}-${mm}-${ddmon[1]}` : undefined;
+    }
+    const sl = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (sl) return `${sl[3]}-${sl[2]}-${sl[1]}`;
+    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (iso) return s;
+    const dash = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (dash) return `${dash[3]}-${dash[2]}-${dash[1]}`;
+    return undefined;
+  };
+  const handleUpdate = async () => {
+    const fields = { ...formData };
+    if (!client?.id) {
+      setDynamicClient({
+        gstin: fields.gstin,
+        company: fields.name,
+        registrationDate: formatRegDate(fields.regDate) || dynamicClient.registrationDate,
+        regNo: formatRegDate(fields.regDate) || dynamicClient.regNo,
+        status: normalizeGstnStatus(fields.status),
+      });
+      toast.success("Client details updated — dashboard card updated.");
+      return;
+    }
+    try {
+      const res = await apiUpdateClient(client.id, {
+        name: fields.name,
+        gstin: fields.gstin,
+        pan: fields.pan,
+        mobile: fields.mobile,
+        email: fields.email,
+        address: fields.address,
+        state: fields.state,
+        status: normalizeGstnStatus(fields.status),
+        reg_date: toIsoDate(fields.regDate),
+        trade_name: fields.tradeName,
+        place: fields.place,
+        pin: fields.pin,
+        phone: fields.phone,
+        business_type: fields.businessType === "Select" ? "" : fields.businessType,
+        taxpayer_type: fields.taxPayerType,
+        upload_type: fields.uploadType,
+        tan: fields.tan,
+        cin: fields.cin,
+        file_no: fields.fileNo,
+        responsible_person: fields.responsiblePerson,
+        designation: fields.designation,
+        alternate_mobile: fields.alternateMobile === "+91" ? "" : fields.alternateMobile,
+        gst_user_id: fields.gstUserId,
+        lut_number: fields.lutNumber,
+      });
+      if (res && res.data && res.data.success === false) {
+        toast.error(res.data.detail || "Update failed.");
+        return;
+      }
+      setDynamicClient({
+        gstin: fields.gstin,
+        company: fields.name,
+        registrationDate: formatRegDate(fields.regDate) || dynamicClient.registrationDate,
+        regNo: formatRegDate(fields.regDate) || dynamicClient.regNo,
+        status: normalizeGstnStatus(fields.status),
+      });
+      setSelectedClient((prev) =>
+        prev && prev.id === client.id ? { ...prev, ...(res.data || {}) } : prev,
+      );
+      setAllClients((prev) =>
+        prev.map((c) => (c.id === client.id ? { ...c, ...(res.data || {}) } : c)),
+      );
+      toast.success("Client details saved to the backend!");
+    } catch (e) {
+      toast.error((e && e.response && e.response.data && (e.response.data.detail || e.response.data.message)) || "Could not save client. Try again.");
+    }
+  };
+  const stateOptions = (() => {
+    const has = formData.state && !INDIAN_STATES.includes(formData.state);
+    return has ? [formData.state, ...INDIAN_STATES] : INDIAN_STATES;
+  })();
+  const businessTypeOptions = (() => {
+    const has = formData.businessType && formData.businessType !== "Select" && !BUSINESS_TYPE_OPTIONS.includes(formData.businessType);
+    return has ? [formData.businessType, ...BUSINESS_TYPE_OPTIONS] : BUSINESS_TYPE_OPTIONS;
+  })();
+  const taxpayerTypeOptions = (() => {
+    const has = formData.taxPayerType && !TAXPAYER_TYPE_OPTIONS.includes(formData.taxPayerType);
+    return has ? [formData.taxPayerType, ...TAXPAYER_TYPE_OPTIONS] : TAXPAYER_TYPE_OPTIONS;
+  })();
   const months = ["Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar"];
   const menuItems = [
     "Dashboard",
@@ -3332,51 +3517,7 @@ const handleImportUpload = () => {
   // GSTR Layout Component (with tabs: Manually, Import, Summary)
   // ==============================================
 
-  // LocalStorage keys
-  // const STORAGE_KEYS = {
-  //   b2b: "gstr_b2bRows",
-  //   b2cLarge: "gstr_b2cLargeRows",
-  //   b2cOthers: "gstr_b2cOthersRows",
-  //   nilExempt: "gstr_nilExemptRows",
-  //   creditDebitRegistered: "gstr_creditDebitRegisteredRows",
-  //   creditDebitUnregistered: "gstr_creditDebitUnregisteredRows",
-  //   advanceLiability: "gstr_advanceLiabilityRows",
-  //   advanceAdjustment: "gstr_advanceAdjustmentRows",
-  //   hsn: "gstr_hsnRows",
-  //   documents: "gstr_documentsRows",
-  //   eco: "gstr_ecoRows",
-  //   summaryTotals: "gstr_summaryTotals",
-  //   outward: "gstr3b_outwardSupplies",
-  //   eco: "gstr3b_ecoSupplies",
-  //   interstate: "gstr3b_interstateSupplies",
-  //   itc: "gstr3b_itcDetails",
-  //   exempt: "gstr3b_exemptNonGst",
-  //   interestLateFee: "gstr3b_interestLateFee"
-  // };
-
-const STORAGE_KEYS = {
-  b2b: "gstr_b2bRows",
-  b2cLarge: "gstr_b2cLargeRows",
-  b2cOthers: "gstr_b2cOthersRows",
-  nilExempt: "gstr_nilExemptRows",
-  creditDebitRegistered: "gstr_creditDebitRegisteredRows",
-  creditDebitUnregistered: "gstr_creditDebitUnregisteredRows",
-  advanceLiability: "gstr_advanceLiabilityRows",
-  advanceAdjustment: "gstr_advanceAdjustmentRows",
-  hsn: "gstr_hsnRows",
-  documents: "gstr_documentsRows",
-  ecoRows: "gstr_ecoRows",
-  summaryTotals: "gstr_summaryTotals",
-  outward: "gstr3b_outwardSupplies",
-  ecoSupplies: "gstr3b_ecoSupplies",
-  interstateUnregistered: "gstr3b_interstateUnregistered",
-interstateComposition: "gstr3b_interstateComposition",
-interstateUin: "gstr3b_interstateUin",
-  itc: "gstr3b_itcDetails",
-  exempt: "gstr3b_exemptNonGst",
- interestLateFee: "gstr3b_interestLateFee",
-gstr3bSavedSummary: "gstr3b_saved_summary"
-};
+  // GSTR section keys are no longer used: sections persist server-side per client.
   // Full State list for POS dropdown
   const stateList = [
     { name: "ANDAMAN AND NICOBAR ISLANDS", code: "35", stateCode: "AN" },
@@ -3579,6 +3720,8 @@ const [activeReportTab, setActiveReportTab] = useState("Summary");
 const [reportYear, setReportYear] = useState(new Date().getFullYear());
 const [reportFromMonth, setReportFromMonth] = useState(new Date().toLocaleString("default", { month: "long" }));
 const [reportToMonth, setReportToMonth] = useState(new Date().toLocaleString("default", { month: "long" }));
+const [reportSummary, setReportSummary] = useState(null);
+const [reportSummaryLoading, setReportSummaryLoading] = useState(false);
 
 
 
@@ -3586,28 +3729,37 @@ const [reportToMonth, setReportToMonth] = useState(new Date().toLocaleString("de
 
   
 
-    const [tdsTcsDownloadRows, setTdsTcsDownloadRows] = useState([
-      { id: 1, selected: false, taxationType: "TDS", gstin: "09AACCF6368D1CV", taxPeriod: "April-2025", tradeName: "MEESHO LTD", taxableValue: 1250.30, igst: 225.05, cgst: "-", sgst: "-", status: "Not Accept" },
-      { id: 2, selected: false, taxationType: "TDS", gstin: "09AACCF6368D1CV", taxPeriod: "April-2025", tradeName: "MEESHO LTD", taxableValue: 1250.30, igst: 225.05, cgst: "-", sgst: "-", status: "Not Accept" },
-      { id: 3, selected: false, taxationType: "TCS", gstin: "09AACCF6368D1CV", taxPeriod: "April-2025", tradeName: "MEESHO LTD", taxableValue: 1250.30, igst: 225.05, cgst: "-", sgst: "-", status: "Not Accept" },
-      { id: 4, selected: false, taxationType: "TDS", gstin: "09AACCF6368D1CV", taxPeriod: "April-2025", tradeName: "MEESHO LTD", taxableValue: 1250.30, igst: 225.05, cgst: "-", sgst: "-", status: "Not Accept" },
-      { id: 5, selected: false, taxationType: "TCS", gstin: "09AACCF6368D1CV", taxPeriod: "April-2025", tradeName: "MEESHO LTD", taxableValue: 1250.30, igst: 225.05, cgst: "-", sgst: "-", status: "Not Accept" },
-      { id: 6, selected: false, taxationType: "TCS", gstin: "09AACCF6368D1CV", taxPeriod: "April-2025", tradeName: "MEESHO LTD", taxableValue: 1250.30, igst: 225.05, cgst: "-", sgst: "-", status: "Not Accept" }
-    ]);
+    const [tdsTcsDownloadRows, setTdsTcsDownloadRows] = useState([]);
 
-    const [tdsTcsUploadRows, setTdsTcsUploadRows] = useState([
-      { id: 1, selected: false, taxationType: "TDS", gstin: "09AACCF6368D1CV", taxPeriod: "April-2025", tradeName: "MEESHO LTD", taxableValue: 1250.30, igst: 225.05, cgst: "-", sgst: "-", status: "Accepted" },
-      { id: 2, selected: false, taxationType: "TDS", gstin: "09AACCF6368D1CV", taxPeriod: "April-2025", tradeName: "MEESHO LTD", taxableValue: 1250.30, igst: 225.05, cgst: "-", sgst: "-", status: "Accepted" },
-      { id: 3, selected: false, taxationType: "TCS", gstin: "09AACCF6368D1CV", taxPeriod: "April-2025", tradeName: "MEESHO LTD", taxableValue: 1250.30, igst: 225.05, cgst: "-", sgst: "-", status: "Accepted" },
-      { id: 4, selected: false, taxationType: "TDS", gstin: "09AACCF6368D1CV", taxPeriod: "April-2025", tradeName: "MEESHO LTD", taxableValue: 1250.30, igst: 225.05, cgst: "-", sgst: "-", status: "Accepted" },
-      { id: 5, selected: false, taxationType: "TCS", gstin: "09AACCF6368D1CV", taxPeriod: "April-2025", tradeName: "MEESHO LTD", taxableValue: 1250.30, igst: 225.05, cgst: "-", sgst: "-", status: "Accepted" },
-      { id: 6, selected: false, taxationType: "TCS", gstin: "09AACCF6368D1CV", taxPeriod: "April-2025", tradeName: "MEESHO LTD", taxableValue: 1250.30, igst: 225.05, cgst: "-", sgst: "-", status: "Rejected" }
-    ]);
+    const [tdsTcsUploadRows, setTdsTcsUploadRows] = useState([]);
 
-    const [tdsTcsFilingRows] = useState([
-      { sl: 1, category: "TDS", status: "Accepted", records: 3, taxableValue: 3750.90, igst: 675.15, cgst: "-", sgst: "-" },
-      { sl: 2, category: "TCS", status: "Accepted", records: 3, taxableValue: 3750.90, igst: 675.15, cgst: "-", sgst: "-" }
-    ]);
+    const tdsTcsFilingRows = (() => {
+      const byType = {};
+      (tdsTcsUploadRows || []).forEach((r) => {
+        const k = r.taxationType;
+        byType[k] = byType[k] || { sl: 0, category: k, status: "Accepted", records: 0, taxableValue: 0, igst: 0, cgst: 0, sgst: 0 };
+        const rec = byType[k];
+        rec.records += 1;
+        rec.taxableValue += Number(r.taxableValue || 0);
+        rec.igst += Number(r.igst || 0);
+        rec.cgst += Number(r.cgst || 0);
+        rec.sgst += Number(r.sgst || 0);
+      });
+      return Object.keys(byType).sort().map((k, i) => {
+        const r = byType[k];
+        return {
+          sl: i + 1,
+          category: r.category,
+          status: r.status,
+          records: r.records,
+          taxableValue: Number(r.taxableValue.toFixed(2)),
+          igst: Number(r.igst.toFixed(2)),
+          cgst: Number(r.cgst.toFixed(2)),
+          sgst: Number(r.sgst.toFixed(2)),
+        };
+      });
+    })();
+    const [tdsTcsLoading, setTdsTcsLoading] = useState(false);
 
 
     const [downloadCenterYear, setDownloadCenterYear] = useState("");
@@ -3615,6 +3767,7 @@ const [downloadCenterMonthDropdownOpen, setDownloadCenterMonthDropdownOpen] = us
 const [selectedDownloadMonths, setSelectedDownloadMonths] = useState([]);
 const [downloadCenterSelectAll, setDownloadCenterSelectAll] = useState(false);
 const [selectedDownloadOptions, setSelectedDownloadOptions] = useState([]); 
+const [downloadCenterLoading, setDownloadCenterLoading] = useState(false); 
 
 const downloadCenterYears = [
   "2017-18",
@@ -3625,7 +3778,8 @@ const downloadCenterYears = [
   "2022-23",
   "2023-24",
   "2024-25",
-  "2025-26"
+  "2025-26",
+  "2026-27"
 ];
 
 const downloadCenterMonths = [
@@ -3717,36 +3871,36 @@ const getImportStorageConfig = (sheetName) => {
   const key = normalizeText(sheetName);
 
   const configMap = {
-    b2bsezde: { stateKey: "b2bRows", setter: setB2bRows, storageKey: STORAGE_KEYS.b2b, summaryKey: "b2b" },
-    b2ba: { stateKey: "b2baRows", setter: setB2baRows, storageKey: STORAGE_KEYS.b2bAmendment, summaryKey: "b2b" },
-    b2cl: { stateKey: "b2cLargeRows", setter: setB2cLargeRows, storageKey: STORAGE_KEYS.b2cLarge, summaryKey: "b2cLarge" },
-    b2cla: { stateKey: "b2claRows", setter: setB2claRows, storageKey: STORAGE_KEYS.b2cla, summaryKey: "b2cLarge" },
-    b2cs: { stateKey: "b2cOthersRows", setter: setB2cOthersRows, storageKey: STORAGE_KEYS.b2cOthers, summaryKey: "b2cOthers" },
-    b2csa: { stateKey: "b2cOthersRows", setter: setB2cOthersRows, storageKey: STORAGE_KEYS.b2cOthers, summaryKey: "b2cOthers" },
-    cdnr: { stateKey: "creditDebitRegisteredRows", setter: setCreditDebitRegisteredRows, storageKey: STORAGE_KEYS.creditDebitRegistered, summaryKey: "b2b" },
-    cdnra: { stateKey: "cdnraRows", setter: setCdnraRows, storageKey: STORAGE_KEYS.cdnra, summaryKey: "b2b" },
-    cdnur: { stateKey: "creditDebitUnregisteredRows", setter: setCreditDebitUnregisteredRows, storageKey: STORAGE_KEYS.creditDebitUnregistered, summaryKey: "b2cLarge" },
-    cdnura: { stateKey: "cdnuraRows", setter: setCdnuraRows, storageKey: STORAGE_KEYS.cdnura, summaryKey: "b2cLarge" },
-    exp: { stateKey: "b2cOthersRows", setter: setB2cOthersRows, storageKey: STORAGE_KEYS.b2cOthers, summaryKey: "b2cOthers" },
-    expa: { stateKey: "exportAmendmentRows", setter: setExportAmendmentRows, storageKey: STORAGE_KEYS.exportAmendment, summaryKey: "b2cOthers" },
-    at: { stateKey: "advanceLiabilityRows", setter: setAdvanceLiabilityRows, storageKey: STORAGE_KEYS.advanceLiability, summaryKey: null },
-    ata: { stateKey: "amendedTaxLiabilityRows", setter: setAmendedTaxLiabilityRows, storageKey: "amendedTaxLiability", summaryKey: null },
-    atadj: { stateKey: "advanceAdjustmentRows", setter: setAdvanceAdjustmentRows, storageKey: STORAGE_KEYS.advanceAdjustment, summaryKey: null },
-    atadja: { stateKey: "advanceAdjustmentRows", setter: setAdvanceAdjustmentRows, storageKey: STORAGE_KEYS.advanceAdjustment, summaryKey: null },
-    exemp: { stateKey: "nilExemptRows", setter: setNilExemptRows, storageKey: STORAGE_KEYS.nilExempt, summaryKey: null },
-    hsnb2b: { stateKey: "hsnRows", setter: setHsnRows, storageKey: STORAGE_KEYS.hsn, summaryKey: "hsn" },
-    hsnb2c: { stateKey: "hsnRows", setter: setHsnRows, storageKey: STORAGE_KEYS.hsn, summaryKey: "hsn" },
-    docs: { stateKey: "documentsRows", setter: setDocumentsRows, storageKey: STORAGE_KEYS.documents, summaryKey: null },
-    eco: { stateKey: "ecoRows", setter: setEcoRows, storageKey: STORAGE_KEYS.ecoRows, summaryKey: null },
-    ecoa: { stateKey: "ecoRows", setter: setEcoRows, storageKey: STORAGE_KEYS.ecoRows, summaryKey: null },
-    ecob2b: { stateKey: "ecoB2bRows", setter: setEcoB2bRows, storageKey: STORAGE_KEYS.ecoB2b, summaryKey: null },
-    ecourp2b: { stateKey: "ecoUrpB2bRows", setter: setEcoUrpB2bRows, storageKey: STORAGE_KEYS.ecoUrpB2b, summaryKey: null },
-    ecob2c: { stateKey: "ecoB2cRows", setter: setEcoB2cRows, storageKey: STORAGE_KEYS.ecoB2c, summaryKey: null },
-    ecourp2c: { stateKey: "ecoUrpB2cRows", setter: setEcoUrpB2cRows, storageKey: STORAGE_KEYS.ecoUrpB2c, summaryKey: null },
-    ecoab2b: { stateKey: "ecoAmendmentB2bRows", setter: setEcoAmendmentB2bRows, storageKey: STORAGE_KEYS.ecoAmendmentB2b, summaryKey: null },
-    ecoab2c: { stateKey: "ecoAmendmentB2cRows", setter: setEcoAmendmentB2cRows, storageKey: STORAGE_KEYS.ecoAmendmentB2c, summaryKey: null },
-    ecoaurp2b: { stateKey: "ecoAmendmentUrpB2bRows", setter: setEcoAmendmentUrpB2bRows, storageKey: STORAGE_KEYS.ecoAmendmentUrpB2b, summaryKey: null },
-    ecoaurp2c: { stateKey: "ecoUrp2cAmendmentRows", setter: setEcoUrp2cAmendmentRows, storageKey: STORAGE_KEYS.ecoUrp2cAmendment, summaryKey: null }
+    b2bsezde: { stateKey: "b2bRows", setter: setB2bRows, summaryKey: "b2b" },
+    b2ba: { stateKey: "b2baRows", setter: setB2baRows, summaryKey: "b2b" },
+    b2cl: { stateKey: "b2cLargeRows", setter: setB2cLargeRows, summaryKey: "b2cLarge" },
+    b2cla: { stateKey: "b2claRows", setter: setB2claRows, summaryKey: "b2cLarge" },
+    b2cs: { stateKey: "b2cOthersRows", setter: setB2cOthersRows, summaryKey: "b2cOthers" },
+    b2csa: { stateKey: "b2cOthersRows", setter: setB2cOthersRows, summaryKey: "b2cOthers" },
+    cdnr: { stateKey: "creditDebitRegisteredRows", setter: setCreditDebitRegisteredRows, summaryKey: "b2b" },
+    cdnra: { stateKey: "cdnraRows", setter: setCdnraRows, summaryKey: "b2b" },
+    cdnur: { stateKey: "creditDebitUnregisteredRows", setter: setCreditDebitUnregisteredRows, summaryKey: "b2cLarge" },
+    cdnura: { stateKey: "cdnuraRows", setter: setCdnuraRows, summaryKey: "b2cLarge" },
+    exp: { stateKey: "b2cOthersRows", setter: setB2cOthersRows, summaryKey: "b2cOthers" },
+    expa: { stateKey: "exportAmendmentRows", setter: setExportAmendmentRows, summaryKey: "b2cOthers" },
+    at: { stateKey: "advanceLiabilityRows", setter: setAdvanceLiabilityRows, summaryKey: null },
+    ata: { stateKey: "amendedTaxLiabilityRows", setter: setAmendedTaxLiabilityRows, summaryKey: null },
+    atadj: { stateKey: "advanceAdjustmentRows", setter: setAdvanceAdjustmentRows, summaryKey: null },
+    atadja: { stateKey: "advanceAdjustmentRows", setter: setAdvanceAdjustmentRows, summaryKey: null },
+    exemp: { stateKey: "nilExemptRows", setter: setNilExemptRows, summaryKey: null },
+    hsnb2b: { stateKey: "hsnRows", setter: setHsnRows, summaryKey: "hsn" },
+    hsnb2c: { stateKey: "hsnRows", setter: setHsnRows, summaryKey: "hsn" },
+    docs: { stateKey: "documentsRows", setter: setDocumentsRows, summaryKey: null },
+    eco: { stateKey: "ecoRows", setter: setEcoRows, summaryKey: null },
+    ecoa: { stateKey: "ecoRows", setter: setEcoRows, summaryKey: null },
+    ecob2b: { stateKey: "ecoB2bRows", setter: setEcoB2bRows, summaryKey: null },
+    ecourp2b: { stateKey: "ecoUrpB2bRows", setter: setEcoUrpB2bRows, summaryKey: null },
+    ecob2c: { stateKey: "ecoB2cRows", setter: setEcoB2cRows, summaryKey: null },
+    ecourp2c: { stateKey: "ecoUrpB2cRows", setter: setEcoUrpB2cRows, summaryKey: null },
+    ecoab2b: { stateKey: "ecoAmendmentB2bRows", setter: setEcoAmendmentB2bRows, summaryKey: null },
+    ecoab2c: { stateKey: "ecoAmendmentB2cRows", setter: setEcoAmendmentB2cRows, summaryKey: null },
+    ecoaurp2b: { stateKey: "ecoAmendmentUrpB2bRows", setter: setEcoAmendmentUrpB2bRows, summaryKey: null },
+    ecoaurp2c: { stateKey: "ecoUrp2cAmendmentRows", setter: setEcoUrp2cAmendmentRows, summaryKey: null }
   };
 
   return configMap[key] || null;
@@ -3974,14 +4128,6 @@ const syncImportedRowsToState = (sheetName, rows, worksheet) => {
   const safeRows = Array.isArray(rows) ? rows : [];
   config.setter(safeRows);
 
-  if (config.storageKey && typeof config.storageKey === "string") {
-    try {
-      localStorage.setItem(config.storageKey, JSON.stringify(safeRows));
-    } catch (error) {
-      console.warn(`Could not save ${sheetName} to localStorage:`, error);
-    }
-  }
-
   const totals = worksheet
     ? getSheetSummaryTotals(worksheet)
     : {
@@ -4101,44 +4247,321 @@ const [itc04Table5CRows, setItc04Table5CRows] = useState(() => {
     };
 
     const handleTdsTcsAllAccept = () => {
+      if (!tdsTcsDownloadRows.length) { toast.error("No records downloaded yet."); return; }
       setTdsTcsDownloadRows(prev =>
         prev.map(row => row.selected ? { ...row, status: "Accepted" } : row)
       );
+      toast.success("Selected records accepted.");
     };
 
     const handleTdsTcsReject = () => {
+      if (!tdsTcsDownloadRows.length) { toast.error("No records downloaded yet."); return; }
       setTdsTcsDownloadRows(prev =>
         prev.map(row => row.selected ? { ...row, status: "Rejected" } : row)
       );
+      toast.success("Selected records rejected.");
     };
 
     const handleTdsTcsDelete = () => {
+      if (!tdsTcsDownloadRows.length) { toast.error("No records downloaded yet."); return; }
       setTdsTcsDownloadRows(prev => prev.filter(row => !row.selected));
+      toast.success("Selected records removed.");
+    };
+
+    const fetchTdsTcsFromGstn = async () => {
+      if (!client || !client.gstin) { toast.error("Select a client with a GSTIN first."); return; }
+      if (!selectedYear) { toast.error("Choose a financial year first."); return; }
+      const now = new Date();
+      const mName = selectedMonth || now.toLocaleString("default", { month: "long" });
+      const idx = monthList.indexOf(mName);
+      const fyStart = parseInt(String(selectedYear || "").slice(0, 4), 10) || (now.getFullYear() - (now.getMonth() < 3 ? 1 : 0));
+      const y = idx >= 0 ? (idx < 9 ? fyStart : fyStart + 1) : now.getFullYear();
+      const period = `${mName}-${y}`;
+      setTdsTcsLoading(true);
+      try {
+        const res = await gstTdsTcs({ period, fy: selectedYear, gstin: client.gstin });
+        const body = (res && res.data) || {};
+        if (!body || body.success === false) {
+          toast.error((body && (body.detail || (body.warnings && body.warnings[0]))) || "Could not download TDS/TCS records.");
+          return;
+        }
+        if (body.gstn === "disconnected") {
+          toast.warning(body.detail || "No GSTN session — connect via GSTN Session (Send OTP + Verify) first.");
+          return;
+        }
+        const raw = Array.isArray(body.data) ? body.data : [];
+        setTdsTcsDownloadRows(raw.map((r, i) => ({
+          id: raw[i].id || (i + 1),
+          selected: false,
+          taxationType: r.taxationType,
+          gstin: r.gstin,
+          taxPeriod: r.taxPeriod || period,
+          tradeName: r.tradeName || "",
+          taxableValue: r.taxableValue,
+          igst: r.igst,
+          cgst: r.cgst,
+          sgst: r.sgst,
+          status: r.status || "Not Accept",
+        })));
+        if (body.warnings && body.warnings.length) toast.info(body.warnings.join(" · "));
+        toast.success(raw.length ? `${raw.length} TDS/TCS record(s) downloaded from GSTN.` : `No TDS/TCS records for ${period}.`);
+      } catch (e) {
+        toast.error((e && e.response && e.response.data && (e.response.data.detail || e.response.data.error)) || e.message || "GSTN download failed.");
+      } finally {
+        setTdsTcsLoading(false);
+      }
     };
 
     const handleTdsTcsDownload = () => {
-      toast.success("TDS/TCS records downloaded successfully!");
+      if (tdsTcsDownloadRows.length) {
+        toast.info("Records already downloaded — refresh using the button to fetch again.");
+      }
+      fetchTdsTcsFromGstn();
     };
 
     const handleTdsTcsUploadPortal = () => {
-      toast.success("TDS/TCS upload initiated on portal!");
+      const accepted = tdsTcsDownloadRows.filter(r => r.status === "Accepted");
+      if (!accepted.length) {
+        toast.error("No accepted records to upload — accept record(s) in Download first.");
+        return;
+      }
+      setTdsTcsUploadRows(prev => {
+        const merged = [...prev];
+        accepted.forEach(r => {
+          if (!merged.some(m => m.gstin === r.gstin && m.taxationType === r.taxationType)) {
+            merged.push({ ...r, selected: false });
+          }
+        });
+        return merged;
+      });
+      toast.success(`${accepted.length} accepted record(s) moved to Upload.`);
     };
 
     const handleTdsTcsSubmit = () => {
-      toast.success("TDS/TCS file submitted successfully!");
+      if (!tdsTcsUploadRows.length) {
+        toast.error("Nothing to file — upload accepted records first.");
+        return;
+      }
+      toast.success(`File summary prepared (${tdsTcsFilingRows.length} category/categories).`);
     };
-    // Row states with localStorage persistence
-    const [b2bRows, setB2bRows] = useState(() => {
-      const saved = localStorage.getItem(STORAGE_KEYS.b2b);
-      return saved ? JSON.parse(saved) : [{ sl: 1, gstin: "", recipientName: "", invNo: "", invDate: "", invValue: 0, pos: "", rcm: "N", applicableTaxRate: "", invType: "", ecoGstin: "", gstRate: 0, taxableValue: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 }];
-    });
-    const [b2cLargeRows, setB2cLargeRows] = useState(() => {
-      const saved = localStorage.getItem(STORAGE_KEYS.b2cLarge);
-      return saved ? JSON.parse(saved) : [{ sl: 1, invNo: "", invDate: "", invValue: 0, pos: "State", applicableTaxRate: "0%/65%", gstRate: 0, taxableValue: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 }];
-    });
-    const [b2cOthersRows, setB2cOthersRows] = useState(() => {
-      const saved = localStorage.getItem(STORAGE_KEYS.b2cOthers);
-      return saved ? JSON.parse(saved) : [{   sl: 1,
+
+    // ---- REPORTS: load real summary data from GSTN/DB --------------- //
+    const reportRangeRef = useRef({ from: reportFromMonth, to: reportToMonth, fy: `${reportYear}-${String(reportYear + 1).slice(-2)}` });
+    const loadReportSummary = (() => {
+      let inflight = null;
+      return async (from, to) => {
+        if (!client || !client.gstin) { toast.error("Select a client with a GSTIN first."); return; }
+        if (inflight) return inflight;
+        const f = from || reportFromMonth;
+        const t = to || reportToMonth;
+        const fy = `${reportYear}-${String(reportYear + 1).slice(-2)}`;
+        reportRangeRef.current = { from: f, to: t, fy };
+        setReportSummaryLoading(true);
+        inflight = gstReportSummary({
+          gstin: client.gstin,
+          fy,
+          from: f,
+          to: t,
+        })
+          .then((res) => {
+            const body = (res && res.data) || {};
+            setReportSummary(body);
+            if (body.warnings && body.warnings.length && body.gstn !== "connected") {
+              toast.info(body.warnings.join(" · "));
+            }
+          })
+          .catch(() => {
+            toast.error("Could not load report data — check the connection.");
+          })
+          .finally(() => {
+            setReportSummaryLoading(false);
+            inflight = null;
+          });
+        return inflight;
+      };
+    })();
+
+    const REPORT_RT_WORDS = [
+      ["GSTR-2A", "GSTR2A"],
+      ["GSTR-2B", "GSTR2B"],
+      ["GSTR-1A", "GSTR1A"],
+      ["GSTR-3B", "GSTR3B"],
+      ["GSTR-1", "GSTR1"],
+    ];
+    const reportInvolvedTypes = (name) => {
+      const up = String(name).toUpperCase();
+      const found = [];
+      REPORT_RT_WORDS.forEach(([word, rt]) => {
+        if (up.includes(word) && !found.includes(rt)) found.push(rt);
+      });
+      return found;
+    };
+
+    const handleReportDownload = async (reportName) => {
+      if (!reportSummary || !Array.isArray(reportSummary.reports)) {
+        toast.warning("Report data not loaded yet — wait for the summary to finish loading.");
+        return;
+      }
+      const rtSet = new Set();
+      reportSummary.reports.forEach((s) => {
+        if (s.name === reportName) (s.types || []).forEach((t) => rtSet.add(t));
+      });
+      reportInvolvedTypes(reportName).forEach((rt) => rtSet.add(rt));
+      let specs = reportSummary.reports.filter((s) => (s.types || []).some((t) => rtSet.has(t)));
+      if (!specs.length) {
+        specs = reportSummary.reports.filter((s) => s.rows && s.rows.length);
+      }
+      if (!specs.length) {
+        toast.warning(`No live data available for "${reportName}" in the selected range.`);
+        return;
+      }
+      const range = reportRangeRef.current || { from: reportFromMonth, to: reportToMonth, fy: `${reportYear}-${String(reportYear + 1).slice(-2)}` };
+      try {
+        const workbook = new ExcelJS.Workbook();
+        const metaSheet = workbook.addWorksheet("Report");
+        metaSheet.columns = [
+          { header: "Field", key: "k", width: 18 },
+          { header: "Value", key: "v", width: 52 },
+        ];
+        metaSheet.addRows([
+          { k: "Report", v: reportName },
+          { k: "Client", v: (client && (client.name || client.company_name)) || "" },
+          { k: "GSTIN", v: (client && client.gstin) || "" },
+          { k: "FY", v: range.fy },
+          { k: "Period", v: `${range.from} – ${range.to}` },
+        ]);
+        const metaHead = metaSheet.getRow(1);
+        metaHead.font = { bold: true };
+
+        specs.forEach((spec) => {
+          const ws = workbook.addWorksheet(String(spec.name).slice(0, 31));
+          ws.columns = [
+            { header: "Period", key: "period", width: 12 },
+            { header: "Return", key: "return_type", width: 10 },
+            { header: "Status", key: "status", width: 12 },
+            { header: "ARN", key: "arn", width: 28 },
+            { header: "Filed At", key: "filed_at", width: 22 },
+            { header: "Taxable Value", key: "taxable", width: 16 },
+            { header: "IGST", key: "igst", width: 13 },
+            { header: "CGST", key: "cgst", width: 13 },
+            { header: "SGST", key: "sgst", width: 13 },
+            { header: "CESS", key: "cess", width: 13 },
+            { header: "Records", key: "records", width: 10 },
+            { header: "Source", key: "source", width: 18 },
+          ];
+          const head = ws.getRow(1);
+          head.font = { bold: true };
+          head.eachCell((cell) => {
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEDE9FE" } };
+          });
+          spec.rows.forEach((r) => {
+            ws.addRow({
+              period: r.period,
+              return_type: r.return_type,
+              status: r.status,
+              arn: r.arn || "",
+              filed_at: r.filed_at || "",
+              taxable: r.taxable || 0,
+              igst: r.igst || 0,
+              cgst: r.cgst || 0,
+              sgst: r.sgst || 0,
+              cess: r.cess || 0,
+              records: r.records || 0,
+              source: r.local_data ? "App / GSTN" : (r.status === "UNKNOWN" ? "GSTN status pending" : "GSTN"),
+            });
+          });
+          if (spec.rows.some((r) => r.sections && Object.keys(r.sections).length)) {
+            const ws2 = workbook.addWorksheet(`Table Details (${String(spec.name).slice(0, 18)})`);
+            ws2.columns = [
+              { header: "Period", key: "period", width: 12 },
+              { header: "Section", key: "section", width: 24 },
+              { header: "Taxable Value", key: "taxable", width: 16 },
+              { header: "IGST", key: "igst", width: 13 },
+              { header: "CGST", key: "cgst", width: 13 },
+              { header: "SGST", key: "sgst", width: 13 },
+              { header: "CESS", key: "cess", width: 13 },
+            ];
+            ws2.getRow(1).font = { bold: true };
+            spec.rows.forEach((r) => {
+              Object.entries(r.sections || {}).forEach(([section, s]) => {
+                ws2.addRow({
+                  period: r.period,
+                  section,
+                  taxable: (s && s.txval) || 0,
+                  igst: (s && s.igst) || 0,
+                  cgst: (s && s.cgst) || 0,
+                  sgst: (s && s.sgst) || 0,
+                  cess: (s && s.cess) || 0,
+                });
+              });
+            });
+          }
+        });
+
+        const consolidated = workbook.addWorksheet("Consolidated");
+        consolidated.columns = [
+          { header: "Period", key: "period", width: 12 },
+          { header: "Return", key: "return_type", width: 10 },
+          { header: "Status", key: "status", width: 12 },
+          { header: "Taxable Value", key: "taxable", width: 16 },
+          { header: "IGST", key: "igst", width: 13 },
+          { header: "CGST", key: "cgst", width: 13 },
+          { header: "SGST", key: "sgst", width: 13 },
+          { header: "CESS", key: "cess", width: 13 },
+          { header: "Records", key: "records", width: 10 },
+        ];
+        const conHead = consolidated.getRow(1);
+        conHead.font = { bold: true };
+        conHead.eachCell((cell) => {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE0E7FF" } };
+        });
+        const periodMap = new Map();
+        specs.forEach((spec) =>
+          (spec.rows || []).forEach((r) => {
+            if (!periodMap.has(r.period)) periodMap.set(r.period, new Map());
+            periodMap.get(r.period).set(r.return_type, r);
+          })
+        );
+        periodMap.forEach((byType, period) => {
+          byType.forEach((r) => {
+            consolidated.addRow({
+              period,
+              return_type: r.return_type,
+              status: r.status,
+              taxable: r.taxable || 0,
+              igst: r.igst || 0,
+              cgst: r.cgst || 0,
+              sgst: r.sgst || 0,
+              cess: r.cess || 0,
+              records: r.records || 0,
+            });
+          });
+        });
+        if (!periodMap.size) {
+          consolidated.addRow({ period: "(no data)", return_type: "", status: "NO DATA" });
+        }
+
+        const buffer = await workbook.xlsx.writeBuffer();
+        const blob = new Blob([buffer], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${reportName} (${range.from}-${range.to} FY ${range.fy}).xlsx`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        toast.success(`${reportName} downloaded from live data.`);
+      } catch (e) {
+        toast.error((e && e.message) || "Report generation failed.");
+      }
+    };
+    // GSTR row states - persisted server-side via saveReturnSections()
+    const [b2bRows, setB2bRows] = useState([{ sl: 1, gstin: "", recipientName: "", invNo: "", invDate: "", invValue: 0, pos: "", rcm: "N", applicableTaxRate: "", invType: "", ecoGstin: "", gstRate: 0, taxableValue: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 }]);
+    const [b2cLargeRows, setB2cLargeRows] = useState([{ sl: 1, invNo: "", invDate: "", invValue: 0, pos: "State", applicableTaxRate: "0%/65%", gstRate: 0, taxableValue: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 }]);
+    const [b2cOthersRows, setB2cOthersRows] = useState([{   sl: 1,
           exportType: "",
           invoiceNumber: "",
           invoiceDate: "",
@@ -4151,45 +4574,18 @@ const [itc04Table5CRows, setItc04Table5CRows] = useState(() => {
           cgst: "",
           igst: "",
           sgst: "",
-          cessAmount: "", }];
-    });
-    const [nilExemptRows, setNilExemptRows] = useState(() => {
-      const saved = localStorage.getItem(STORAGE_KEYS.nilExempt);
-      return saved ? JSON.parse(saved) : [{ sl: 1, description: "", nilRated: 0, exempted: 0, nonGst: 0 }];
-    });
-    const [creditDebitRegisteredRows, setCreditDebitRegisteredRows] = useState(() => {
-      const saved = localStorage.getItem(STORAGE_KEYS.creditDebitRegistered);
-      return saved ? JSON.parse(saved) : [{ sl: 1, gstin: "", recipientName: "", noteNo: "", noteDate: "", noteType: "Debit", pos: "", rcm: "N", noteSupplyType: "Regular B2B", noteValue: 0, diffRatePercent: "", rate: 0, taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 }];
-    });
-    const [creditDebitUnregisteredRows, setCreditDebitUnregisteredRows] = useState(() => {
-      const saved = localStorage.getItem(STORAGE_KEYS.creditDebitUnregistered);
-      return saved ? JSON.parse(saved) : [{ sl: 1, urType: "1 - B2C (Large)", noteNo: "", noteDate: "", noteType: "Debit", pos: "", rcm: "N", noteSupplyType: "Regular B2B", noteValue: 0, diffRatePercent: "", rate: 0, taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 }];
-    });
-    const [advanceLiabilityRows, setAdvanceLiabilityRows] = useState(() => {
-      const saved = localStorage.getItem(STORAGE_KEYS.advanceLiability);
-      return saved ? JSON.parse(saved) : [{ sl: 1, pos: "", diffRatePercent: "", rate: 0, grossAdvance: 0, taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 }];
-    });
-    const [advanceAdjustmentRows, setAdvanceAdjustmentRows] = useState(() => {
-      const saved = localStorage.getItem(STORAGE_KEYS.advanceAdjustment);
-      return saved ? JSON.parse(saved) : [{ sl: 1, pos: "", diffRatePercent: "", rate: 0, grossAdvance: 0, taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 }];
-    });
-    const [hsnRows, setHsnRows] = useState(() => {
-      const saved = localStorage.getItem(STORAGE_KEYS.hsn);
-      return saved ? JSON.parse(saved) : [{ sl: 1, hsn: "", description: "", uqc: "", totalQty: 0, totalValue: 0, rate: 0, taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 }];
-    });
-    const [documentsRows, setDocumentsRows] = useState(() => {
-      const saved = localStorage.getItem(STORAGE_KEYS.documents);
-      return saved ? JSON.parse(saved) : [{ sl: 1, nature: "1 - Invoice for Outward Supply", srFrom: "", srTo: "", totalNumber: 0, cancelled: 0 }];
-    });
-   const [ecoRows, setEcoRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.ecoRows);
-  return saved ? JSON.parse(saved) : [
+          cessAmount: "", }]);
+    const [nilExemptRows, setNilExemptRows] = useState([{ sl: 1, description: "", nilRated: 0, exempted: 0, nonGst: 0 }]);
+    const [creditDebitRegisteredRows, setCreditDebitRegisteredRows] = useState([{ sl: 1, gstin: "", recipientName: "", noteNo: "", noteDate: "", noteType: "Debit", pos: "", rcm: "N", noteSupplyType: "Regular B2B", noteValue: 0, diffRatePercent: "", rate: 0, taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 }]);
+    const [creditDebitUnregisteredRows, setCreditDebitUnregisteredRows] = useState([{ sl: 1, urType: "1 - B2C (Large)", noteNo: "", noteDate: "", noteType: "Debit", pos: "", rcm: "N", noteSupplyType: "Regular B2B", noteValue: 0, diffRatePercent: "", rate: 0, taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 }]);
+    const [advanceLiabilityRows, setAdvanceLiabilityRows] = useState([{ sl: 1, pos: "", diffRatePercent: "", rate: 0, grossAdvance: 0, taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 }]);
+    const [advanceAdjustmentRows, setAdvanceAdjustmentRows] = useState([{ sl: 1, pos: "", diffRatePercent: "", rate: 0, grossAdvance: 0, taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 }]);
+    const [hsnRows, setHsnRows] = useState([{ sl: 1, hsn: "", description: "", uqc: "", totalQty: 0, totalValue: 0, rate: 0, taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 }]);
+    const [documentsRows, setDocumentsRows] = useState([{ sl: 1, nature: "1 - Invoice for Outward Supply", srFrom: "", srTo: "", totalNumber: 0, cancelled: 0 }]);
+   const [ecoRows, setEcoRows] = useState([
     { sl: 1, nature: "1 - Liable to Collect Tax u/s 52(TCS)", gstinEco: "", nameEco: "", netValue: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 }
-  ];
-});
-    const [b2bAmendmentRows, setB2bAmendmentRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.b2bAmendment);
-  return saved ? JSON.parse(saved) : [
+  ]);
+    const [b2bAmendmentRows, setB2bAmendmentRows] = useState([
     {
       sl: 1,
       gstin: "",
@@ -4204,11 +4600,8 @@ const [itc04Table5CRows, setItc04Table5CRows] = useState(() => {
       sgst: 0,
       cess: 0
     }
-  ];
-});
-const [exportAmendmentRows, setExportAmendmentRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.exportAmendment);
-  return saved ? JSON.parse(saved) : [
+  ]);
+const [exportAmendmentRows, setExportAmendmentRows] = useState([
     {
       sl: 1,
       exportType: "",
@@ -4223,11 +4616,8 @@ const [exportAmendmentRows, setExportAmendmentRows] = useState(() => {
       igst: 0,
       cess: 0
     }
-  ];
-});
-const [ecoB2bRows, setEcoB2bRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.ecoB2b);
-  return saved ? JSON.parse(saved) : [
+  ]);
+const [ecoB2bRows, setEcoB2bRows] = useState([
     {
       sl: 1,
       gstin: "",
@@ -4242,11 +4632,8 @@ const [ecoB2bRows, setEcoB2bRows] = useState(() => {
       sgst: 0,
       cess: 0
     }
-  ];
-});
-const [ecoUrpB2bRows, setEcoUrpB2bRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.ecoUrpB2b);
-  return saved ? JSON.parse(saved) : [
+  ]);
+const [ecoUrpB2bRows, setEcoUrpB2bRows] = useState([
     {
       sl: 1,
       supplierGstin: "",
@@ -4258,11 +4645,8 @@ const [ecoUrpB2bRows, setEcoUrpB2bRows] = useState(() => {
       sgst: 0,
       cess: 0
     }
-  ];
-});
-const [ecoB2cRows, setEcoB2cRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.ecoB2c);
-  return saved ? JSON.parse(saved) : [
+  ]);
+const [ecoB2cRows, setEcoB2cRows] = useState([
     {
       sl: 1,
       pos: "",
@@ -4273,11 +4657,8 @@ const [ecoB2cRows, setEcoB2cRows] = useState(() => {
       sgst: 0,
       cess: 0
     }
-  ];
-});
-const [ecoUrpB2cRows, setEcoUrpB2cRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.ecoUrpB2c);
-  return saved ? JSON.parse(saved) : [
+  ]);
+const [ecoUrpB2cRows, setEcoUrpB2cRows] = useState([
     {
       sl: 1,
       pos: "",
@@ -4288,11 +4669,8 @@ const [ecoUrpB2cRows, setEcoUrpB2cRows] = useState(() => {
       sgst: 0,
       cess: 0
     }
-  ];
-});
-const [ecoAmendmentB2bRows, setEcoAmendmentB2bRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.ecoAmendmentB2b);
-  return saved ? JSON.parse(saved) : [
+  ]);
+const [ecoAmendmentB2bRows, setEcoAmendmentB2bRows] = useState([
     {
       sl: 1,
       gstin: "",
@@ -4307,12 +4685,9 @@ const [ecoAmendmentB2bRows, setEcoAmendmentB2bRows] = useState(() => {
       sgst: 0,
       cess: 0
     }
-  ];
-});
+  ]);
 
-const [ecoAmendmentB2cRows, setEcoAmendmentB2cRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.ecoAmendmentB2c);
-  return saved ? JSON.parse(saved) : [
+const [ecoAmendmentB2cRows, setEcoAmendmentB2cRows] = useState([
     {
       sl: 1,
       supplierGstin: "",
@@ -4325,12 +4700,9 @@ const [ecoAmendmentB2cRows, setEcoAmendmentB2cRows] = useState(() => {
       sgst: 0,
       cess: 0
     }
-  ];
-});
+  ]);
 
-const [ecoAmendmentUrpB2bRows, setEcoAmendmentUrpB2bRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.ecoAmendmentUrpB2b);
-  return saved ? JSON.parse(saved) : [
+const [ecoAmendmentUrpB2bRows, setEcoAmendmentUrpB2bRows] = useState([
     {
       sl: 1,
       supplierGstin: "",
@@ -4342,17 +4714,10 @@ const [ecoAmendmentUrpB2bRows, setEcoAmendmentUrpB2bRows] = useState(() => {
       sgst: 0,
       cess: 0
     }
-  ];
-
-  });
+  ]);
 
 
-const [b2baRows, setB2baRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.b2ba);
-
-  return saved
-    ? JSON.parse(saved)
-    : [
+const [b2baRows, setB2baRows] = useState([
         {
           sl: 1,
           gstin: "",
@@ -4374,13 +4739,9 @@ const [b2baRows, setB2baRows] = useState(() => {
           sgst: 0,
           cess: 0
         }
-      ];
-});
+      ]);
 
-const [b2claRows, setB2claRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.b2cla);
-
-  return saved ? JSON.parse(saved) : [
+const [b2claRows, setB2claRows] = useState([
     {
       sl: 1,
       origInvNo: "",
@@ -4398,15 +4759,9 @@ const [b2claRows, setB2claRows] = useState(() => {
       cessAmount: 0,
       ecoGstin: ""
     }
-  ];
-});
+  ]);
 
-const [cdnraRows, setCdnraRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.cdnra);
-
-  return saved
-    ? JSON.parse(saved)
-    : [
+const [cdnraRows, setCdnraRows] = useState([
         {
           sl: 1,
           gstin: "",
@@ -4439,16 +4794,10 @@ const [cdnraRows, setCdnraRows] = useState(() => {
 
           cessAmount: "",
         },
-      ];
-});
+      ]);
       
 
-const [cdnuraRows, setCdnuraRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.cdnura);
-
-  return saved
-    ? JSON.parse(saved)
-    : [
+const [cdnuraRows, setCdnuraRows] = useState([
         {
           sl: 1,
 
@@ -4478,16 +4827,10 @@ const [cdnuraRows, setCdnuraRows] = useState(() => {
 
           cessAmount: "",
         },
-      ];
-});
+      ]);
 
 
-const [ecoUrp2cAmendmentRows, setEcoUrp2cAmendmentRows] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.ecoUrp2cAmendment);
-
-  return saved
-    ? JSON.parse(saved)
-    : [
+const [ecoUrp2cAmendmentRows, setEcoUrp2cAmendmentRows] = useState([
         {
           sl: 1,
 
@@ -4502,12 +4845,9 @@ const [ecoUrp2cAmendmentRows, setEcoUrp2cAmendmentRows] = useState(() => {
 
           cessAmount: "",
         },
-      ];
-});
+      ]);
 
-const [amendedTaxLiabilityRows, setAmendedTaxLiabilityRows] = useState(() => {
-  const saved = localStorage.getItem("amendedTaxLiability");
-  return saved ? JSON.parse(saved) : [{
+const [amendedTaxLiabilityRows, setAmendedTaxLiabilityRows] = useState([{
     sl: 1,
     financialYear: "",
     originalMonth: "",
@@ -4519,47 +4859,22 @@ const [amendedTaxLiabilityRows, setAmendedTaxLiabilityRows] = useState(() => {
     cgst: 0,
     sgst: 0,
     cessAmount: 0
-  }];
-});
+  }]);
 
-const [b2csaRows, setB2csaRows] = useState(() => {
-  const saved = localStorage.getItem("b2csaRows");
-  return saved ? JSON.parse(saved) : [{ sl: 1, financialYear: "", originalMonth: "", pos: "", type: "E/OF", applicableTaxRate: "", rate: 0, taxableValue: 0, cess: 0, ecoGstin: "" }];
-});
+const [b2csaRows, setB2csaRows] = useState([{ sl: 1, financialYear: "", originalMonth: "", pos: "", type: "E/OF", applicableTaxRate: "", rate: 0, taxableValue: 0, cess: 0, ecoGstin: "" }]);
 
-const [advanceReceivedAmendmentRows, setAdvanceReceivedAmendmentRows] = useState(() => {
-  const saved = localStorage.getItem("advanceReceivedAmendmentRows");
-  return saved ? JSON.parse(saved) : [{ sl: 1, financialYear: "", originalMonth: "", pos: "", applicableTaxRate: "", rate: 0, grossAdvance: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 }];
-});
+const [advanceReceivedAmendmentRows, setAdvanceReceivedAmendmentRows] = useState([{ sl: 1, financialYear: "", originalMonth: "", pos: "", applicableTaxRate: "", rate: 0, grossAdvance: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 }]);
 
-const [advanceAdjustmentAmendmentRows, setAdvanceAdjustmentAmendmentRows] = useState(() => {
-  const saved = localStorage.getItem("advanceAdjustmentAmendmentRows");
-  return saved ? JSON.parse(saved) : [{ sl: 1, financialYear: "", originalMonth: "", pos: "", applicableTaxRate: "", rate: 0, grossAdvance: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 }];
-});
+const [advanceAdjustmentAmendmentRows, setAdvanceAdjustmentAmendmentRows] = useState([{ sl: 1, financialYear: "", originalMonth: "", pos: "", applicableTaxRate: "", rate: 0, grossAdvance: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 }]);
 
-const [ecoSupplyAmendmentRows, setEcoSupplyAmendmentRows] = useState(() => {
-  const saved = localStorage.getItem("ecoSupplyAmendmentRows");
-  return saved ? JSON.parse(saved) : [{ sl: 1, nature: "", financialYear: "", originalMonth: "", origEcoGstin: "", revisedEcoGstin: "", ecoName: "", netValue: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 }];
-});
+const [ecoSupplyAmendmentRows, setEcoSupplyAmendmentRows] = useState([{ sl: 1, nature: "", financialYear: "", originalMonth: "", origEcoGstin: "", revisedEcoGstin: "", ecoName: "", netValue: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 }]);
     
-  const [summaryTotals, setSummaryTotals] = useState(() => {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEYS.summaryTotals);
-    return saved ? JSON.parse(saved) : {
-      b2b: { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 },
-      b2cLarge: { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 },
-      b2cOthers: { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 },
-      hsn: { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 }
-    };
-  } catch {
-    return {
-      b2b: { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 },
-      b2cLarge: { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 },
-      b2cOthers: { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 },
-      hsn: { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 }
-    };
-  }
-});
+  const [summaryTotals, setSummaryTotals] = useState({
+    b2b: { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 },
+    b2cLarge: { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 },
+    b2cOthers: { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 },
+    hsn: { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 },
+  });
     const defaultOutwardSupplies = [
   {
     nature: "(a) Total Taxable Supplies (Other than Zero Rated, Nil Rated and Exempted supplies)",
@@ -4679,22 +4994,7 @@ const handleImportFile = async () => {
     setIsUploading(false);
   }
 };
-const [outwardSupplies, setOutwardSupplies] = useState(() => {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEYS.outward));
-
-    if (
-      Array.isArray(saved) &&
-      saved.length === 5
-    ) {
-      return saved;
-    }
-
-    return defaultOutwardSupplies;
-  } catch {
-    return defaultOutwardSupplies;
-  }
-});
+    const [outwardSupplies, setOutwardSupplies] = useState(defaultOutwardSupplies);
     // 2. ECO u/s 9(5)
     const defaultEcoSupplies = [
   {
@@ -4717,44 +5017,15 @@ const [outwardSupplies, setOutwardSupplies] = useState(() => {
   }
 ];
 
-const [ecoSupplies, setEcoSupplies] = useState(() => {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEYS.ecoSupplies));
-
-    if (Array.isArray(saved) && saved.length === 2) {
-      return saved;
-    }
-
-    return defaultEcoSupplies;
-  } catch {
-    return defaultEcoSupplies;
-  }
-});
+const [ecoSupplies, setEcoSupplies] = useState(defaultEcoSupplies);
     // 3. Inter-State Supplies (composition, exempt, nil, non-GST)
-  const [unregisteredSupplies, setUnregisteredSupplies] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.interstateUnregistered);
-  return saved
-    ? JSON.parse(saved)
-    : [{ placeOfSupply: "", taxableValue: "", igst: "" }];
-});
+  const [unregisteredSupplies, setUnregisteredSupplies] = useState([{ placeOfSupply: "", taxableValue: "", igst: "" }]);
 
-const [compositionSupplies, setCompositionSupplies] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.interstateComposition);
-  return saved
-    ? JSON.parse(saved)
-    : [{ placeOfSupply: "", taxableValue: "", igst: "" }];
-});
+const [compositionSupplies, setCompositionSupplies] = useState([{ placeOfSupply: "", taxableValue: "", igst: "" }]);
 
-const [uinSupplies, setUinSupplies] = useState(() => {
-  const saved = localStorage.getItem(STORAGE_KEYS.interstateUin);
-  return saved
-    ? JSON.parse(saved)
-    : [{ placeOfSupply: "", taxableValue: "", igst: "" }];
-});
+const [uinSupplies, setUinSupplies] = useState([{ placeOfSupply: "", taxableValue: "", igst: "" }]);
     // 4. Eligible ITC (sabse bada table)
-    const [itcDetails, setItcDetails] = useState(() => {
-      const saved = localStorage.getItem(STORAGE_KEYS.itc);
-      return saved ? JSON.parse(saved) : {
+    const [itcDetails, setItcDetails] = useState({
         available: [
           { desc: "(1) Import of Goods", igst: "", cgst: "", sgst: "", cess: "" },
           { desc: "(2) Import of Services", igst: "", cgst: "", sgst: "", cess: "" },
@@ -4771,25 +5042,17 @@ const [uinSupplies, setUinSupplies] = useState(() => {
           { desc: "(1) ITC Reclaimed which was reversed under Table 4(A)(5) in earlier tax period", igst: "", cgst: "", sgst: "", cess: "" },
           { desc: "(2) Ineligible ITC under section 16(4) & ITC restricted due to POS rules", igst: "", cgst: "", sgst: "", cess: "" }
         ]
-      };
-    });
+      });
     // 5. Exempt, Nil Rated, Non-GST Supplies
-    const [exemptNonGst, setExemptNonGst] = useState(() => {
-      const saved = localStorage.getItem(STORAGE_KEYS.exempt);
-      return saved ? JSON.parse(saved) : [
+    const [exemptNonGst, setExemptNonGst] = useState([
         { nature: "From a supplier under composition scheme, Exempt and NIL Rated Supply", interstate: "", intrastate: "" },
         { nature: "Non GST Supply", interstate: "", intrastate: "" }
-      ];
-    });
+      ]);
     // 6. Interest & Late Fee
-    const [interestLateFee, setInterestLateFee] = useState(() => {
-      const saved = localStorage.getItem(STORAGE_KEYS.interestLateFee);
-      return saved ? JSON.parse(saved) : [
+    const [interestLateFee, setInterestLateFee] = useState([
         { desc: "Interest", igst: "", cgst: "", sgst: "", cess: "" },
         { desc: "Late Fees", igst: "", cgst: "", sgst: "", cess: "" }
-      ];
-    });
-    // Save all states to localStorage
+      ]);
     const [importStep, setImportStep] = useState("sources"); // start with source selection
 const [selectedSource, setSelectedSource] = useState(null);
 const [uploadedFile, setUploadedFile] = useState(null);
@@ -4803,14 +5066,7 @@ const [skipValidation, setSkipValidation] = useState(false);
     const [selectedRows, setSelectedRows] = useState([]);
     const [selectAll, setSelectAll] = useState(false);
 
-    const [gstr3bSavedSummary, setGstr3bSavedSummary] = useState(() => {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEYS.gstr3bSavedSummary);
-    return saved ? JSON.parse(saved) : {};
-  } catch {
-    return {};
-  }
-});
+    const [gstr3bSavedSummary, setGstr3bSavedSummary] = useState({});
     // Dropdown controls
     const [openPosDropdownRow, setOpenPosDropdownRow] = useState(null);
     const [openSupplyTypeDropdownRow, setOpenSupplyTypeDropdownRow] = useState(null);
@@ -4867,61 +5123,7 @@ useEffect(() => {
 }, []);
     
 
-    // Save to localStorage
-    useEffect(() => localStorage.setItem(STORAGE_KEYS.b2b, JSON.stringify(b2bRows)), [b2bRows]);
-    useEffect(() => localStorage.setItem(STORAGE_KEYS.b2cLarge, JSON.stringify(b2cLargeRows)), [b2cLargeRows]);
-    useEffect(() => localStorage.setItem(STORAGE_KEYS.b2cOthers, JSON.stringify(b2cOthersRows)), [b2cOthersRows]);
-    useEffect(() => localStorage.setItem(STORAGE_KEYS.nilExempt, JSON.stringify(nilExemptRows)), [nilExemptRows]);
-    useEffect(() => localStorage.setItem(STORAGE_KEYS.creditDebitRegistered, JSON.stringify(creditDebitRegisteredRows)), [creditDebitRegisteredRows]);
-    useEffect(() => localStorage.setItem(STORAGE_KEYS.creditDebitUnregistered, JSON.stringify(creditDebitUnregisteredRows)), [creditDebitUnregisteredRows]);
-    useEffect(() => localStorage.setItem(STORAGE_KEYS.advanceLiability, JSON.stringify(advanceLiabilityRows)), [advanceLiabilityRows]);
-    useEffect(() => localStorage.setItem(STORAGE_KEYS.advanceAdjustment, JSON.stringify(advanceAdjustmentRows)), [advanceAdjustmentRows]);
-    useEffect(() => localStorage.setItem(STORAGE_KEYS.hsn, JSON.stringify(hsnRows)), [hsnRows]);
-    useEffect(() => localStorage.setItem(STORAGE_KEYS.documents, JSON.stringify(documentsRows)), [documentsRows]);
-  useEffect(() => localStorage.setItem(STORAGE_KEYS.ecoRows, JSON.stringify(ecoRows)), [ecoRows]);
-  
-    useEffect(() => localStorage.setItem(STORAGE_KEYS.summaryTotals, JSON.stringify(summaryTotals)), [summaryTotals]);
-    useEffect(() => {
-  localStorage.setItem(
-    STORAGE_KEYS.gstr3bSavedSummary,
-    JSON.stringify(gstr3bSavedSummary)
-  );
-}, [gstr3bSavedSummary]);
-    useEffect(() => {
-      localStorage.setItem(STORAGE_KEYS.outward, JSON.stringify(outwardSupplies));
-    }, [outwardSupplies]);
-    useEffect(() => {
-  localStorage.setItem(STORAGE_KEYS.ecoSupplies, JSON.stringify(ecoSupplies));
-}, [ecoSupplies]);
-    useEffect(() => {
-  localStorage.setItem(
-    STORAGE_KEYS.interstateUnregistered,
-    JSON.stringify(unregisteredSupplies)
-  );
-}, [unregisteredSupplies]);
-
-useEffect(() => {
-  localStorage.setItem(
-    STORAGE_KEYS.interstateComposition,
-    JSON.stringify(compositionSupplies)
-  );
-}, [compositionSupplies]);
-
-useEffect(() => {
-  localStorage.setItem(
-    STORAGE_KEYS.interstateUin,
-    JSON.stringify(uinSupplies)
-  );
-}, [uinSupplies]);
-    useEffect(() => {
-      localStorage.setItem(STORAGE_KEYS.itc, JSON.stringify(itcDetails));
-    }, [itcDetails]);
-    useEffect(() => {
-      localStorage.setItem(STORAGE_KEYS.exempt, JSON.stringify(exemptNonGst));
-    }, [exemptNonGst]);
-    useEffect(() => {
-      localStorage.setItem(STORAGE_KEYS.interestLateFee, JSON.stringify(interestLateFee));
-    }, [interestLateFee]);
+    // GSTR section data is persisted server-side via saveReturnSections() - no local cache.
     const years = gstFYList();
     const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
     // GSTR-1 sections (normal case - non-amendment)
@@ -4979,6 +5181,13 @@ useEffect(() => {
 const isTDSTCS = title.toUpperCase().includes("TDS/TCS");
 const tdsTcsSections = ["Download", "Upload", "TDS/TCS Filing"];
 const isReports = title.toUpperCase().includes("REPORTS");
+
+useEffect(() => {
+  if (!isReports) return;
+  if (!client || !client.gstin) return;
+  const t = setTimeout(() => loadReportSummary(), 60);
+  return () => clearTimeout(t);
+}, [isReports, activeReportTab, reportYear, reportFromMonth, reportToMonth, client && client.id]);
 
 const itc04Sections = ["Table 4", "Table 5(A)", "Table 5(B)", "Table 5(C)"];
 const isDownloadCenter = title.toUpperCase().includes("DOWNLOAD CENTER");
@@ -5056,8 +5265,230 @@ const handleCancelAll = () => {
   setSelectedDownloadMonths([]);
 };
 
-const handleDownloadCenterDownload = () => {
-  toast.success("Download Center request submitted successfully!");
+const handleDownloadCenterDownload = async () => {
+  if (!client || !client.gstin) {
+    toast.error("Select a client with a GSTIN first.");
+    return;
+  }
+  const options = selectedDownloadOptions;
+  const months = selectedDownloadMonths;
+  if (!options.length || !months.length) {
+    toast.error("Select at least one file type and one month.");
+    return;
+  }
+  const fy = downloadCenterYear || `${new Date().getFullYear() - (new Date().getMonth() < 3 ? 1 : 0)}-${String(new Date().getFullYear()).slice(-2)}`;
+  const fyStart = parseInt(String(fy).slice(0, 4), 10);
+  setDownloadCenterLoading(true);
+  const notes = [];
+  try {
+    const workbook = new ExcelJS.Workbook();
+    const metaSheet = workbook.addWorksheet("Summary");
+    metaSheet.columns = [
+      { header: "Client", key: "client", width: 40 },
+      { header: "GSTIN", key: "gstin", width: 20 },
+      { header: "FY", key: "fy", width: 12 },
+      { header: "Months", key: "months", width: 46 },
+      { header: "Files", key: "files", width: 34 },
+    ];
+    const metaHeader = metaSheet.getRow(1);
+    metaHeader.font = { bold: true };
+    metaSheet.addRow({
+      client: client.name || client.company_name || "",
+      gstin: client.gstin,
+      fy,
+      months: months.join(", "),
+      files: options.join(", "),
+    });
+
+    // ---- Return-type sheets (GSTR-1/1A/2A/2B/3B) via report-summary --- //
+    const rtMap = {
+      "GSTR-1": "GSTR1",
+      "GSTR-1A": "GSTR1A",
+      "GSTR-2A": "GSTR2A",
+      "GSTR-2B": "GSTR2B",
+      "GSTR-3B": "GSTR3B",
+    };
+    const returnTypeOptions = options.filter((o) => rtMap[o]);
+    let summary = null;
+    if (returnTypeOptions.length) {
+      const res = await gstReportSummary({
+        gstin: client.gstin,
+        fy,
+        from: months[0],
+        to: months[months.length - 1],
+      });
+      summary = (res && res.data) || {};
+      if (summary.gstn === "disconnected") {
+        notes.push("GSTN not connected — return sheets use app data.");
+      }
+    }
+    const periodInMonths = (p) => {
+      const mm = parseInt(String(p).slice(0, 2), 10);
+      return mm >= 1 && mm <= 12 ? downloadCenterMonths[mm - 1] : "";
+    };
+    returnTypeOptions.forEach((opt) => {
+      const rt = rtMap[opt];
+      const ws = workbook.addWorksheet(String(opt).slice(0, 31));
+      ws.columns = [
+        { header: "Period", key: "period", width: 12 },
+        { header: "Return", key: "return_type", width: 10 },
+        { header: "Status", key: "status", width: 14 },
+        { header: "ARN", key: "arn", width: 30 },
+        { header: "Filed At", key: "filed_at", width: 22 },
+        { header: "Taxable Value", key: "taxable", width: 16 },
+        { header: "IGST", key: "igst", width: 13 },
+        { header: "CGST", key: "cgst", width: 13 },
+        { header: "SGST", key: "sgst", width: 13 },
+        { header: "CESS", key: "cess", width: 13 },
+        { header: "Records", key: "records", width: 10 },
+      ];
+      const head = ws.getRow(1);
+      head.font = { bold: true };
+      const spec =
+        summary && summary.reports
+          ? summary.reports.find((r) => r.types.includes(rt))
+          : null;
+      const rows = spec ? spec.rows.filter((r) => months.includes(periodInMonths(r.period))) : [];
+      if (!rows.length) {
+        ws.addRow({
+          period: "(no data)",
+          return_type: rt,
+          status: "NO DATA",
+          arn: "",
+          filed_at: "",
+          taxable: 0,
+          igst: 0,
+          cgst: 0,
+          sgst: 0,
+          cess: 0,
+          records: 0,
+        });
+      }
+      rows.forEach((row) =>
+        ws.addRow({
+          period: row.period,
+          return_type: row.return_type,
+          status: row.status,
+          arn: row.arn || "",
+          filed_at: row.filed_at || "",
+          taxable: row.taxable || 0,
+          igst: row.igst || 0,
+          cgst: row.cgst || 0,
+          sgst: row.sgst || 0,
+          cess: row.cess || 0,
+          records: row.records || 0,
+        })
+      );
+    });
+
+    // ---- TDS/TCS sheet (live GSTR-7/GSTR-8 per selected month) -------- //
+    if (options.includes("TDS/TCS")) {
+      const ws = workbook.addWorksheet("TDS/TCS");
+      ws.columns = [
+        { header: "Taxation", key: "taxationType", width: 12 },
+        { header: "GSTIN", key: "gstin", width: 18 },
+        { header: "Trade Name", key: "tradeName", width: 34 },
+        { header: "Period", key: "taxPeriod", width: 12 },
+        { header: "Taxable Value", key: "taxableValue", width: 16 },
+        { header: "IGST", key: "igst", width: 13 },
+        { header: "CGST", key: "cgst", width: 13 },
+        { header: "SGST", key: "sgst", width: 13 },
+        { header: "Status", key: "status", width: 12 },
+      ];
+      ws.getRow(1).font = { bold: true };
+      for (const m of months) {
+        const idx = downloadCenterMonths.indexOf(m);
+        const y = idx >= 0 ? (idx < 9 ? fyStart : fyStart + 1) : fyStart + 1;
+        try {
+          const res = await gstTdsTcs({ period: `${m}-${y}`, fy, gstin: client.gstin });
+          const body = (res && res.data) || {};
+          if (body.gstn === "disconnected") {
+            notes.push(`TDS/TCS ${m}: no GSTN session.`);
+            continue;
+          }
+          (body.data || []).forEach((r) =>
+            ws.addRow({
+              taxationType: r.taxationType,
+              gstin: r.gstin,
+              tradeName: r.tradeName || "",
+              taxPeriod: r.taxPeriod || `${m}-${y}`,
+              taxableValue: r.taxableValue || 0,
+              igst: r.igst || 0,
+              cgst: r.cgst || 0,
+              sgst: r.sgst || 0,
+              status: r.status || "Not Accept",
+            })
+          );
+          if (body.warnings && body.warnings.length) {
+            notes.push(`TDS/TCS ${m}: ${body.warnings.join(" · ")}`);
+          }
+        } catch (e) {
+          notes.push(`TDS/TCS ${m}: fetch failed.`);
+        }
+      }
+    }
+
+    // ---- Electronic Cash/Credit Ledger (live GETCASH / GETITC) -------- //
+    if (options.includes("Electronic Cash/Credit Ledger")) {
+      const ws = workbook.addWorksheet("Ledger");
+      ws.columns = [
+        { header: "Type", key: "type", width: 26 },
+        { header: "Reference", key: "ref", width: 26 },
+        { header: "Date", key: "date", width: 16 },
+        { header: "Amount", key: "amount", width: 16 },
+      ];
+      ws.getRow(1).font = { bold: true };
+      for (const action of ["GETCASH", "GETITC"]) {
+        try {
+          const res = await gstLedger({ action, gstin: client.gstin });
+          const body = (res && res.data) || {};
+          if (body.gstn === "disconnected") {
+            notes.push(`${action}: no GSTN session.`);
+            continue;
+          }
+          const data = body.data || body.result || body;
+          const items = Array.isArray(data)
+            ? data
+            : Array.isArray(data.data) ? data.data : Array.isArray(data.result) ? data.result : [];
+          if (!items.length) {
+            ws.addRow({ type: action, ref: "", date: "", amount: 0 });
+          }
+          items.forEach((r) =>
+            ws.addRow({
+              type: action,
+              ref: r.tranid || r.tranId || r.refno || r.docId || "",
+              date: r.tranDt || r.date || r.txndt || "",
+              amount: r.txnamt || r.amount || r.openingBalance || r.closingBalance || 0,
+            })
+          );
+          if (body.warnings && body.warnings.length) {
+            notes.push(`${action}: ${body.warnings.join(" · ")}`);
+          }
+        } catch (e) {
+          notes.push(`${action}: fetch failed.`);
+        }
+      }
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `GST Download Center (FY ${fy}).xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast.success(`${options.length} file(s) generated for ${client.gstin}.`);
+    if (notes.length) toast.info(notes.slice(0, 3).join(" · "), { duration: 6000 });
+  } catch (e) {
+    toast.error((e && e.message) || "Download Center request failed.");
+  } finally {
+    setDownloadCenterLoading(false);
+  }
 };
 useEffect(() => {
   const handleClickOutside = (event) => {
@@ -8386,21 +8817,368 @@ if (reportName === "GSTR-2B ITC Reclaim Reports") {
     };
     const [rows, setRows] = getRowsAndSetter();
     
+    // ── Backend sync (ReturnData store): per client + return type + period + FY ──
+    // GSTR-1 rows hydrate/persist under stable short section ids so the same
+    // state object round-trips between the grid and `GET/POST /gst-app/returns/`.
+    const currentReturnType = isGSTR3B ? "GSTR3B" : isGSTR1A ? "GSTR1A" : (isITC04 || isTDSTCS || isReports || isDownloadCenter) ? (isITC04 ? "ITC04" : "") : "GSTR1";
+    const GSTR1_SECTIONS = {
+      b2b: [b2bRows, setB2bRows],
+      b2cLarge: [b2cLargeRows, setB2cLargeRows],
+      b2cOthers: [b2cOthersRows, setB2cOthersRows],
+      nilExempt: [nilExemptRows, setNilExemptRows],
+      creditDebitRegistered: [creditDebitRegisteredRows, setCreditDebitRegisteredRows],
+      creditDebitUnregistered: [creditDebitUnregisteredRows, setCreditDebitUnregisteredRows],
+      advanceLiability: [advanceLiabilityRows, setAdvanceLiabilityRows],
+      advanceAdjustment: [advanceAdjustmentRows, setAdvanceAdjustmentRows],
+      hsn: [hsnRows, setHsnRows],
+      documents: [documentsRows, setDocumentsRows],
+      eco: [ecoRows, setEcoRows],
+      summaryTotals: [summaryTotals, setSummaryTotals],
+      b2bAmendment: [b2bAmendmentRows, setB2bAmendmentRows],
+      exportAmendment: [exportAmendmentRows, setExportAmendmentRows],
+      ecoB2b: [ecoB2bRows, setEcoB2bRows],
+      ecoUrpB2b: [ecoUrpB2bRows, setEcoUrpB2bRows],
+      ecoB2c: [ecoB2cRows, setEcoB2cRows],
+      ecoUrpB2c: [ecoUrpB2cRows, setEcoUrpB2cRows],
+      b2ba: [b2baRows, setB2baRows],
+      b2cla: [b2claRows, setB2claRows],
+      cdnra: [cdnraRows, setCdnraRows],
+      cdnura: [cdnuraRows, setCdnuraRows],
+      ecoAmendmentB2b: [ecoAmendmentB2bRows, setEcoAmendmentB2bRows],
+      ecoAmendmentB2c: [ecoAmendmentB2cRows, setEcoAmendmentB2cRows],
+      ecoAmendmentUrpB2b: [ecoAmendmentUrpB2bRows, setEcoAmendmentUrpB2bRows],
+      ecoUrp2cAmendment: [ecoUrp2cAmendmentRows, setEcoUrp2cAmendmentRows],
+      amendedTaxLiability: [amendedTaxLiabilityRows, setAmendedTaxLiabilityRows],
+      b2csa: [b2csaRows, setB2csaRows],
+      advanceReceivedAmendment: [advanceReceivedAmendmentRows, setAdvanceReceivedAmendmentRows],
+      advanceAdjustmentAmendment: [advanceAdjustmentAmendmentRows, setAdvanceAdjustmentAmendmentRows],
+      ecoSupplyAmendment: [ecoSupplyAmendmentRows, setEcoSupplyAmendmentRows],
+    };
+    const GSTR3B_SECTIONS = {
+      outward: [outwardSupplies, setOutwardSupplies],
+      ecoSupplies: [ecoSupplies, setEcoSupplies],
+      interstateUnregistered: [unregisteredSupplies, setUnregisteredSupplies],
+      interstateComposition: [compositionSupplies, setCompositionSupplies],
+      interstateUin: [uinSupplies, setUinSupplies],
+      itc: [itcDetails, setItcDetails],
+      exempt: [exemptNonGst, setExemptNonGst],
+      interestLateFee: [interestLateFee, setInterestLateFee],
+      paymentCash: [cashLedger, setCashLedger],
+      paymentCredit: [creditLedger, setCreditLedger],
+    };
+    const ITC04_SECTIONS = {
+      itc04_t4: [itc04Table4Rows, setItc04Table4Rows],
+      itc04_5a: [itc04Table5ARows, setItc04Table5ARows],
+      itc04_5b: [itc04Table5BRows, setItc04Table5BRows],
+      itc04_5c: [itc04Table5CRows, setItc04Table5CRows],
+    };
+    const GSTR1_DISPLAY_MAP = {
+      "1 - 4A, 4B, 6B, 6C - B2B, SEZ, DE Invoices": ["b2b"],
+      "2 - B2C (Large) Invoices": ["b2cLarge"],
+      "3 - Exports Invoices": ["b2cOthers"],
+      "4 - B2C (Others)": ["nilExempt"],
+      "5 - 8B, 8C, 8D - Nil Rated Supplies": ["nilExempt"],
+      "6 - 9B  Credit / Debit Notes (Registered)": ["creditDebitRegistered"],
+      "7 - 9B  Credit / Debit Notes (Unregistered)": ["creditDebitUnregistered"],
+      "8 - 11A(1), 11A(2) - Tax Liability (Advances Received)": ["advanceLiability"],
+      "9 - 11B Adjustment of Advances": ["advanceAdjustment"],
+      "12 - HSN-wise summary of outward supplies": ["hsn"],
+      "13 - Documents Issued": ["documents"],
+      "14 - Supplies made through ECO": ["eco"],
+      "16 - B2B Amendment": ["b2bAmendment"],
+      "17 - Export Amendment": ["exportAmendment"],
+      "18 - ECO B2B": ["ecoB2b"],
+      "19 - ECO URP B2B": ["ecoUrpB2b"],
+      "20 - ECO B2C": ["ecoB2c"],
+      "21 - ECO URP B2C": ["ecoUrpB2c"],
+      "22 - ECO Amendment B2B": ["ecoAmendmentB2b"],
+      "23 - ECO Amendment B2C": ["ecoAmendmentB2c"],
+      "24 - ECO Amendment URP B2B": ["ecoAmendmentUrpB2b"],
+      "25 - B2BA": ["b2ba"],
+      "26 - B2CLA": ["b2cla"],
+      "27 - CDNRA": ["cdnra"],
+      "28 - CDNURA": ["cdnura"],
+      "29 - ECO URP2C Amendment": ["ecoUrp2cAmendment"],
+      "30 - Amended Tax Liability": ["amendedTaxLiability"],
+      "31 - B2C (Small) Amendment": ["b2csa"],
+      "32 - Advance Received Amendment": ["advanceReceivedAmendment"],
+      "33 - Advance Adjustment Amendment": ["advanceAdjustmentAmendment"],
+      "34 - Supply through ECO Amendment": ["ecoSupplyAmendment"],
+    };
+    const GSTR3B_DISPLAY_MAP = [
+      ["outward"],
+      ["ecoSupplies"],
+      ["interstateUnregistered", "interstateComposition", "interstateUin"],
+      ["itc"],
+      ["exempt"],
+      ["interestLateFee"],
+      ["paymentCash", "paymentCredit"],
+    ];
+    const ITC04_DISPLAY_MAP = {
+      "Table 4": ["itc04_t4"],
+      "Table 5(A)": ["itc04_5a"],
+      "Table 5(B)": ["itc04_5b"],
+      "Table 5(C)": ["itc04_5c"],
+    };
+    // ── Live GSTN section sync (Vanaya) ──────────────────────────────────
+    // Section codes keyed by the local section ids; display-name overrides fix
+    // the few ids the legacy grid reuses for a different GSTN section
+    // (Exports/B2C-Others/Nil-rated share row state). Each return type paths
+    // to its own API version: GSTR-1/1A -> v5.0, GSTR-3B -> v7.1, ITC-04 ->
+    // v1.2 (itc04 wired on the backend map; UI buttons cover the three below).
+    const gstnReturnTypes = { GSTR1: "gstr1", GSTR1A: "gstr1a", GSTR3B: "gstr3b", ITC04: "itc04" };
+    const gstnVersions = { gstr1: "v5.0", gstr1a: "v5.0", gstr3b: "v7.1", itc04: "v1.2" };
+    const gstr1gstnCodes = {
+      b2b: "B2B", b2ba: "B2BA", b2cLarge: "B2CL", b2cla: "B2CLA",
+      b2cOthers: "B2CS", b2csa: "B2CSA", nilExempt: "NIL",
+      creditDebitRegistered: "CDNR", cdnra: "CDNRA",
+      creditDebitUnregistered: "CDNUR", cdnura: "CDNURA",
+      advanceLiability: "AT", advanceAdjustment: "ATA",
+      advanceReceivedAmendment: "ATA", advanceAdjustmentAmendment: "ATA",
+      amendedTaxLiability: "ATA", hsn: "HSN", documents: "DOC_ISSUE",
+      eco: "ECOM", ecoB2b: "ECOM", ecoUrpB2b: "ECOM", ecoB2c: "ECOM",
+      ecoUrpB2c: "ECOM", ecoAmendmentB2b: "ECOM", ecoAmendmentB2c: "ECOM",
+      ecoAmendmentUrpB2b: "ECOM", ecoUrp2cAmendment: "ECOM",
+      ecoSupplyAmendment: "SUPECOA", exportAmendment: "EXPA", summaryTotals: "SUM",
+    };
+    const gstr1gstnNameOverride = {
+      "3 - Exports Invoices": "EXP",
+      "4 - B2C (Others)": "B2CS",
+      "5 - 8B, 8C, 8D - Nil Rated Supplies": "NIL",
+      "8 - 11A(1), 11A(2) - Tax Liability (Advances Received)": "AT",
+      "9 - 11B Adjustment of Advances": "AT",
+    };
+    const gstr3bgstnCodes = { outward: "3bsummary", ecoSupplies: "3bsummary" };
+    const gstnNum = (v) => { const n = Number(v); return Number.isFinite(n) && n !== 0 ? n : undefined; };
+    const gstnRowToUi = (r) => {
+      if (!r || typeof r !== "object") return null;
+      const itm = (Array.isArray(r.itms) && ((r.itms[0] && (r.itms[0].itm_det || r.itms[0])) || {})) || {};
+      const rate = gstnNum(itm.rt) || gstnNum(r.rt);
+      return {
+        ...r,
+        gstinNumber: r.ctin || r.gstin || "",
+        invoiceNumber: r.inum || r.doc_num || r.invoiceNumber || "",
+        invoiceDate: r.idt || r.doc_dt || r.invoiceDate || "",
+        pos: r.pos || "",
+        taxableValue: gstnNum(itm.txval ?? r.txval),
+        igst: gstnNum(itm.iamt ?? r.iamt),
+        cgst: gstnNum(itm.camt ?? r.camt),
+        sgst: gstnNum(itm.samt ?? r.samt),
+        cess: gstnNum(itm.csamt ?? r.csamt),
+        rate,
+        total: gstnNum(r.val ?? itm.txval),
+      };
+    };
+    const uiRowToGstn = (row) => {
+      const r = row || {};
+      const txval = gstnNum(r.taxableValue ?? r.taxable ?? r.taxable_value ?? r.netValue);
+      const camt = gstnNum(r.cgst) ?? gstnNum(r.camt);
+      const samt = gstnNum(r.sgst) ?? gstnNum(r.samt);
+      const iamt = gstnNum(r.igst) ?? gstnNum(r.iamt);
+      const csamt = gstnNum(r.cess) ?? gstnNum(r.csamt);
+      const tax = [camt, samt, iamt, csamt].filter((v) => v !== undefined).reduce((a, b) => a + b, 0);
+      let rate = gstnNum(r.rate);
+      if (!rate && txval && tax > 0) rate = Math.round((tax / txval) * 100 * 100) / 100;
+      const itm_det = {};
+      if (txval !== undefined) itm_det.txval = txval;
+      if (rate !== undefined) itm_det.rt = rate;
+      if (camt !== undefined) itm_det.camt = camt;
+      if (samt !== undefined) itm_det.samt = samt;
+      if (iamt !== undefined) itm_det.iamt = iamt;
+      if (csamt !== undefined) itm_det.csamt = csamt;
+      const out = {
+        cfs: r.cfs || "004",
+        pos: r.pos || "",
+        inum: r.invoiceNumber || r.inum || r.invNo || "",
+        idt: r.invoiceDate || r.idt || r.invDate || "",
+        val: gstnNum(r.total ?? r.totalValue) ?? txval ?? 0,
+        chksum: "",
+        flag: "N",
+      };
+      if (Object.keys(itm_det).length) out.itms = [{ num: 1, itm_det }];
+      return out;
+    };
+    const itc04RowToUi = (r) => {
+      if (!r || typeof r !== "object") return null;
+      const pick = (...keys) => {
+        for (const k of keys) {
+          const v = r[k];
+          if (v !== undefined && v !== null && v !== "") return v;
+        }
+        return "";
+      };
+      return {
+        ...r,
+        gstinJobWorker: pick("gstin_js", "gstinjs", "gstin", "ctin"),
+        state: pick("state_cd", "statecode", "state"),
+        challanNumber: pick("challan_id", "challan_no", "challanId", "challanNumber"),
+        challanDate: pick("challan_dt", "challan_date", "challanDate"),
+        goodsType: pick("type_of_goods", "goods_type", "goodsType"),
+        description: pick("goods_desc", "desc", "description"),
+        uqc: pick("uqc", "qcd"),
+        quantity: pick("qty", "quantity"),
+        taxableValue: pick("txval", "taxable_value", "taxableValue", "val"),
+        rate: pick("rt", "rate"),
+        igst: pick("iamt", "igst"),
+        cgst: pick("camt", "cgst"),
+        sgst: pick("samt", "sgst"),
+        cess: pick("csamt", "cess"),
+      };
+    };
+    const itc04RowToGstn = (rows) =>
+      (rows || []).map((r) => {
+        const out = {};
+        Object.entries(r || {}).forEach(([k, v]) => {
+          if (k !== "sl" && v !== undefined && v !== null && v !== "") out[k] = v;
+        });
+        return out;
+      });
+    const gstnSync = async (mode) => {
+      try {
+        const rt = gstnReturnTypes[currentReturnType];
+        if (!rt || !client || !client.gstin) {
+          toast.error("Live GSTN sync works for GSTR-1 / GSTR-1A / GSTR-3B / ITC-04 with a client GSTIN selected.");
+          return;
+        }
+        if (!selectedMonth || !selectedYear) {
+          toast.error("Choose a return period (month + FY) first.");
+          return;
+        }
+        const ids = currentSectionIds();
+        const activeId = Array.isArray(ids) ? ids[0] : ids;
+        const code = isITC04
+          ? activeId
+          : isGSTR3B
+            ? (gstr3bgstnCodes[activeId] || "3bsummary")
+            : (gstr1gstnNameOverride[selectedSection] || gstr1gstnCodes[activeId]);
+        if (!activeId || !code) {
+          toast.error(`No GSTN section code mapped for «${selectedSection}».`);
+          return;
+        }
+        const base = {
+          return_type: rt,
+          period: selectedMonth,
+          fy: selectedYear,
+          gstin: client.gstin,
+          section: code,
+          version: gstnVersions[rt],
+        };
+        if (mode === "fetch") {
+          const res = await gstRetSection(base);
+          const body = (res && res.data) || {};
+          if (body.gstn === "disconnected") {
+            toast.warning("No GSTN session for this GSTIN — connect via GSTN Session (Send OTP + Verify) first.");
+            return;
+          }
+          let items = Array.isArray(body[code]) ? body[code] : null;
+          if (!items && Array.isArray(body.response)) items = body.response;
+          if (!items && Array.isArray(body.data)) items = body.data;
+          if (!items && body && typeof body === "object") {
+            const arr = Object.values(body).find((v) => Array.isArray(v) && v.length > 0);
+            if (arr) items = arr;
+          }
+          if (!Array.isArray(items)) {
+            toast.error(`GSTN returned no rows for ${code}: ${JSON.stringify(body).slice(0, 220)}`);
+            return;
+          }
+          const defs = sectionDefsFor(currentReturnType);
+          const setter = defs[activeId] && defs[activeId][1];
+          const mapped = items.map(isITC04 ? itc04RowToUi : gstnRowToUi).filter(Boolean);
+          if (setter) { setter(mapped); } else { toast.error("No row setter for this section."); return; }
+          toast.success(`${code}: ${mapped.length} row(s) loaded from GSTN.`);
+          return;
+        }
+        const payload = isITC04 ? itc04RowToGstn(rows) : uiRowsToGstn(rows);
+        const res = await gstRetSave({ ...base, payload: { [code]: payload } });
+        const body = (res && res.data) || {};
+        if (body.gstn === "disconnected") {
+          toast.warning("No GSTN session for this GSTIN — connect via GSTN Session (Send OTP + Verify) first.");
+          return;
+        }
+        const ref = body && (body.reference_id || body.referenceId || (body.data && body.data.reference_id));
+        toast.success(ref ? `${code} saved to GSTN · ref ${ref}` : `${code} saved to GSTN (no reference returned).`);
+      } catch (e) {
+        const msg = (e && e.response && e.response.data && (e.response.data.detail || e.response.data.error)) || e.message || "GSTN sync failed";
+        toast.error(`GSTN sync error: ${msg}`);
+      }
+    };
+    const currentSectionIds = () => {
+      if (!currentReturnType) return null;
+      if (isITC04) {
+        return ITC04_DISPLAY_MAP[selectedItcTable] || null;
+      }
+      if (isGSTR3B) {
+        const idx = gstr3bSections.indexOf(selectedSection);
+        return idx >= 0 ? GSTR3B_DISPLAY_MAP[idx] : null;
+      }
+      return GSTR1_DISPLAY_MAP[selectedSection] || null;
+    };
+    const sectionDefsFor = (rt) =>
+      rt === "GSTR3B" ? GSTR3B_SECTIONS : rt === "ITC04" ? ITC04_SECTIONS : GSTR1_SECTIONS;
+
+    const persistReturnSections = async (ids) => {
+      if (!currentReturnType || !client || !client.id) return null;
+      const defs = sectionDefsFor(currentReturnType);
+      const sections = {};
+      (ids || Object.keys(defs)).forEach((id) => {
+        const pair = defs[id];
+        if (pair) {
+          const val = pair[0];
+          if (val !== undefined && val !== null) sections[id] = val;
+        }
+      });
+      if (!Object.keys(sections).length) return null;
+      try {
+        const res = await saveReturnSections({
+          return_type: currentReturnType,
+          period: selectedMonth,
+          fy: selectedYear,
+          client: client.id,
+          sections,
+        });
+        return res && res.data;
+      } catch (e) {
+        toast.error((e && e.response && e.response.data && (e.response.data.detail || e.response.data.message)) || "Could not save return to backend.");
+        return null;
+      }
+    };
+
+    const backendBucket = useRef("");
+    useEffect(() => {
+      const bucket = `${currentReturnType}|${selectedYear}|${selectedMonth}`;
+      if (!currentReturnType || !client || !client.id || backendBucket.current === bucket) return;
+      backendBucket.current = bucket;
+      (async () => {
+        try {
+          const res = await fetchReturnSections({ client: client.id, return_type: currentReturnType, period: selectedMonth, fy: selectedYear });
+          const sections = (res && res.sections) || {};
+          const defs = sectionDefsFor(currentReturnType);
+          Object.entries(defs).forEach(([id, pair]) => {
+            if (!Object.prototype.hasOwnProperty.call(sections, id)) return;
+            const payload = sections[id];
+            if (payload !== undefined && payload !== null && typeof pair[1] === "function") {
+              pair[1](payload);
+            }
+          });
+        } catch { /* keep local/default rows */ }
+      })();
+    }, [currentReturnType, selectedMonth, selectedYear]);
+    
     const addRow = () => {
       const newSl = rows.length + 1;
       let newRow = { sl: newSl };
-      if (selectedSection.includes("B2C (Others)")) newRow.type = "E/OF";
-      if (selectedSection.includes("Credit / Debit Notes (Registered)")) {
+      if (selectedSection && selectedSection.includes("B2C (Others)")) newRow.type = "E/OF";
+      if (selectedSection && selectedSection.includes("Credit / Debit Notes (Registered)")) {
         newRow.noteType = "Debit";
         newRow.noteSupplyType = "Regular B2B";
       }
-      if (selectedSection.includes("Credit / Debit Notes (Unregistered)")) {
+      if (selectedSection && selectedSection.includes("Credit / Debit Notes (Unregistered)")) {
         newRow.urType = urTypeOptions[0];
         newRow.noteType = "Debit";
         newRow.noteSupplyType = "Regular B2B";
       }
-      if (selectedSection.includes("Documents Issued")) newRow.nature = documentNatureOptions[0];
-      if (selectedSection.includes("ECO")) newRow.nature = natureOptions[0];
+      if (selectedSection && selectedSection.includes("Documents Issued")) newRow.nature = documentNatureOptions[0];
+      if (selectedSection && selectedSection.includes("ECO")) newRow.nature = natureOptions[0];
       setRows([...rows, newRow]);
     };
     const updateCell = (index, key, value) => {
@@ -8422,10 +9200,16 @@ if (reportName === "GSTR-2B ITC Reclaim Reports") {
         total += Number(row.total || (taxable + igst + cgst + sgst + cess));
       });
       let key = "";
-      if (selectedSection.includes("B2B")) key = "b2b";
-      else if (selectedSection.includes("B2C (Large)")) key = "b2cLarge";
-      else if (selectedSection.includes("B2C (Others)")) key = "b2cOthers";
-      else if (selectedSection.includes("HSN")) key = "hsn";
+      if (selectedSection && selectedSection.includes("B2B")) key = "b2b";
+      else if (selectedSection && selectedSection.includes("B2C (Large)")) key = "b2cLarge";
+      else if (selectedSection && selectedSection.includes("B2C (Others)")) key = "b2cOthers";
+      else if (selectedSection && selectedSection.includes("HSN")) key = "hsn";
+      const ids = currentSectionIds();
+      if (ids) {
+        persistReturnSections(ids).then((r) => {
+          if (r) toast.success(`${currentReturnType} section saved to backend (Portal).`);
+        });
+      }
       if (key && total > 0) {
         
         alert("Saved successfully!");
@@ -8625,6 +9409,13 @@ const handleGstr3bSave = () => {
     }
   }));
 
+  const ids = currentSectionIds();
+  if (ids) {
+    persistReturnSections(ids).then((r) => {
+      if (r) toast.success(`${currentReturnType} «${selectedSection}» saved to backend (Portal).`);
+    });
+  }
+
   setActiveSubTab("Summary");
   alert(`${selectedSection} saved successfully!`);
 };
@@ -8782,6 +9573,12 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
   if (isGSTR3B) {
     handleGstr3bSave();
   } else {
+    const ids = currentSectionIds();
+    if (ids) {
+      persistReturnSections(ids).then((r) => {
+        if (r) toast.success(`${currentReturnType} section saved to backend (Portal).`);
+      });
+    }
     alert("Data Saved Successfully!");
   }
 }}
@@ -10956,6 +11753,37 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
   const currentMonth = currentDate.toLocaleString("default", { month: "long" });
   const currentYear = currentDate.getFullYear();
 
+  // LIVE SUMMARY METADATA (GSTN + DB) for the Summary tab
+  const summaryData =
+    activeReportTab === "Summary" && reportSummary && Array.isArray(reportSummary.periods)
+      ? reportSummary
+      : null;
+  const reportMeta = (name) => {
+    if (!summaryData) return null;
+    const spec = (summaryData.reports || []).find((r) => r.name === name);
+    if (!spec || !spec.rows || !spec.rows.length) {
+      return { rows: [], totals: null, last: null, latestStatus: "" };
+    }
+    const rows = spec.rows;
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.taxable += Number(r.taxable || 0);
+        acc.igst += Number(r.igst || 0);
+        acc.cgst += Number(r.cgst || 0);
+        acc.sgst += Number(r.sgst || 0);
+        acc.cess += Number(r.cess || 0);
+        acc.records += Number(r.records || 0);
+        return acc;
+      },
+      { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, records: 0 }
+    );
+    const last = rows.slice().reverse().find((r) => r.status && r.status !== "UNKNOWN");
+    const latestStatus = last
+      ? `${last.return_type} ${last.period} ${last.status}${last.arn ? " · " + last.arn : ""}`
+      : (rows.every((r) => !r.local_data) ? "Not filed in app — verify via GSTN" : "Prepared / pending GSTN");
+    return { rows, totals, last, latestStatus };
+  };
+
   return (
     <div style={{ padding: "4px 0 16px 0" }}>
       <div
@@ -11054,6 +11882,53 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
                   <option key={month} value={month}>{month}</option>
                 ))}
               </select>
+            </div>
+
+            {/* Live data status */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "9px",
+                padding: "8px 13px",
+                borderRadius: "10px",
+                border: "1px solid #dbeafe",
+                background: reportSummaryLoading ? "#eef6ff" : (summaryData && summaryData.gstn === "connected" ? "#f0fdf4" : "#fffbeb"),
+                boxShadow: "0 2px 8px rgba(37,99,235,0.07)",
+              }}
+            >
+              <div
+                style={{
+                  width: "9px",
+                  height: "9px",
+                  borderRadius: "50%",
+                  background: reportSummaryLoading ? "#f59e0b" : (summaryData && summaryData.gstn === "connected" ? "#22c55e" : "#f59e0b"),
+                  boxShadow: reportSummaryLoading ? "0 0 0 4px rgba(245,158,11,0.18)" : "0 0 0 4px rgba(34,197,94,0.15)",
+                }}
+              />
+              <span style={{ fontSize: "0.7rem", fontWeight: 700, color: "#334155", letterSpacing: "-0.01em" }}>
+                {reportSummaryLoading
+                  ? "LOADING FROM GSTN…"
+                  : summaryData
+                    ? `LIVE · ${summaryData.gstn.toUpperCase()} · ${summaryData.periods.length} period(s)`
+                    : "REPORTS READY"}
+              </span>
+              <button
+                onClick={() => loadReportSummary()}
+                title="Refresh live report data"
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: "7px",
+                  border: "1px solid #c7d2fe",
+                  background: "#ffffff",
+                  color: "#4f46e5",
+                  fontWeight: 700,
+                  fontSize: "0.66rem",
+                  cursor: "pointer",
+                }}
+              >
+                Refresh
+              </button>
             </div>
           </div>
         </div>
@@ -11226,7 +12101,7 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
                       </div>
                       {/* Download Button */}
                       <button
-                        onClick={() => handleDownload(report)}
+                        onClick={() => (reportSummary && reportSummary.reports && reportSummary.reports.length ? handleReportDownload(report) : handleDownload(report))}
                         title={`Download ${report}`}
                         style={{
                           height: "58px",
@@ -11298,31 +12173,77 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
                   e.currentTarget.style.borderColor = "#c4b5fd";
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: "12px", flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      height: "42px", width: "42px", borderRadius: "10px",
-                      background: "#ede9fe", color: "#4f46e5",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontWeight: "700", fontSize: "1rem", flexShrink: 0,
-                      boxShadow: "0 2px 6px rgba(79,70,229,0.15)",
-                    }}
-                  >
-                    {index + 1}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px", flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
+                    <div
+                      style={{
+                        height: "42px", width: "42px", borderRadius: "10px",
+                        background: "#ede9fe", color: "#4f46e5",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontWeight: "700", fontSize: "1rem", flexShrink: 0,
+                        boxShadow: "0 2px 6px rgba(79,70,229,0.15)",
+                      }}
+                    >
+                      {index + 1}
+                    </div>
+                    <div
+                      style={{
+                        color: "#3730a3", fontSize: "0.75rem", fontWeight: 600,
+                        lineHeight: 1.35, overflow: "hidden",
+                        textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%",
+                        flex: 1,
+                      }}
+                    >
+                      {report}
+                    </div>
                   </div>
-                  <div
-                    style={{
-                      color: "#3730a3", fontSize: "0.75rem", fontWeight: 600,
-                      lineHeight: 1.35, overflow: "hidden",
-                      textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%",
-                    }}
-                  >
-                    {report}
-                  </div>
+                  {activeReportTab === "Summary" && (() => {
+                    const meta = reportMeta(report);
+                    if (!meta) return null;
+                    return (
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "3px",
+                          paddingLeft: "54px",
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: "0.62rem",
+                            fontWeight: 700,
+                            color: meta.last ? "#059669" : "#b45309",
+                            letterSpacing: "-0.01em",
+                          }}
+                        >
+                          {meta.latestStatus}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: "0.6rem",
+                            color: "#64748b",
+                            fontWeight: 600,
+                            letterSpacing: "-0.01em",
+                          }}
+                        >
+                          TXV ₹{meta.totals.taxable.toLocaleString("en-IN")} · IGST ₹
+                          {meta.totals.igst.toLocaleString("en-IN")} · CGST ₹
+                          {meta.totals.cgst.toLocaleString("en-IN")} · SGST ₹
+                          {meta.totals.sgst.toLocaleString("en-IN")} · CES ₹
+                          {meta.totals.cess.toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
                 <button
-                  onClick={() => handleDownload(report)}
-                  title="Download Report"
+                  onClick={() =>
+                    summaryData && summaryData.reports && summaryData.reports.length
+                      ? handleReportDownload(report)
+                      : handleDownload(report)
+                  }
+                  title={summaryData && summaryData.reports && summaryData.reports.length ? "Download from live data" : "Download Report"}
                   style={{
                     height: "58px",
                           width: "58px",
@@ -11535,6 +12456,7 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
 
           <button
             onClick={handleDownloadCenterDownload}
+            disabled={downloadCenterLoading}
             style={{
               padding: "9px 18px",
               borderRadius: "10px",
@@ -11543,10 +12465,11 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
               color: "#fff",
               fontSize: "0.82rem",
               fontWeight: 700,
-              cursor: "pointer",
+              cursor: downloadCenterLoading ? "wait" : "pointer",
+              opacity: downloadCenterLoading ? 0.75 : 1,
             }}
           >
-            Download
+            {downloadCenterLoading ? "Preparing…" : "Download"}
           </button>
         </div>
       </div>
@@ -11581,6 +12504,8 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
             </div>
 
             <select
+              value={downloadCenterYear || downloadCenterYears[downloadCenterYears.length - 1]}
+              onChange={(e) => setDownloadCenterYear(e.target.value)}
               style={{
                 width: "100%",
                 height: "34px",
@@ -11593,18 +12518,8 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
                 cursor: "pointer",
               }}
             >
-              {[
-                "2017-2018",
-                "2018-2019",
-                "2019-2020",
-                "2020-2021",
-                "2021-2022",
-                "2022-2023",
-                "2023-2024",
-                "2024-2025",
-                "2025-2026",
-              ].map((year) => (
-                <option key={year}>{year}</option>
+              {downloadCenterYears.map((year) => (
+                <option key={year} value={year}>{year}</option>
               ))}
             </select>
           </div>
@@ -11725,16 +12640,25 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
                     </tr>
                   </thead>
                   <tbody>
+                    {tdsTcsDownloadRows.length === 0 && (
+                      <tr>
+                        <td colSpan={10} style={{ padding: "18px", textAlign: "center", color: "#64748b", fontWeight: 600 }}>
+                          {tdsTcsLoading
+                            ? "Fetching TDS/TCS records from GSTN…"
+                            : "No records yet — click “Download” to fetch GSTR-7 (TDS) / GSTR-8 (TCS) from GSTN."}
+                        </td>
+                      </tr>
+                    )}
                     {tdsTcsDownloadRows.map((row) => (
                       <tr key={row.id} style={{ borderBottom: "1px solid #e5e7eb" }}>
                         <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db" }}>{row.taxationType}</td>
                         <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db" }}>{row.gstin}</td>
                         <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "center" }}>{row.taxPeriod}</td>
-                        <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db" }}>{row.tradeName}</td>
+                        <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db" }}>{row.tradeName || "—"}</td>
                         <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "right" }}>{Number(row.taxableValue).toFixed(2)}</td>
                         <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "right" }}>{Number(row.igst).toFixed(2)}</td>
-                        <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "center" }}>{row.cgst}</td>
-                        <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "center" }}>{row.sgst}</td>
+                        <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "right" }}>{Number(row.cgst).toFixed(2)}</td>
+                        <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "right" }}>{Number(row.sgst).toFixed(2)}</td>
                         <td style={{
                           padding: "7px 10px",
                           borderRight: "1px solid #d1d5db",
@@ -11759,8 +12683,8 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
               </div>
 
               <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "12px", flexWrap: "wrap" }}>
-                <button onClick={handleTdsTcsDownload} style={{ padding: "7px 16px", background: "linear-gradient(135deg,#2563eb,#1d4ed8)", color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer", fontSize: "0.82rem", boxShadow: "0 2px 8px rgba(37,99,235,0.25)" }}>
-                  Download
+                <button onClick={handleTdsTcsDownload} disabled={tdsTcsLoading} style={{ padding: "7px 16px", background: "linear-gradient(135deg,#2563eb,#1d4ed8)", color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, cursor: tdsTcsLoading ? "wait" : "pointer", fontSize: "0.82rem", boxShadow: "0 2px 8px rgba(37,99,235,0.25)", opacity: tdsTcsLoading ? 0.7 : 1 }}>
+                  {tdsTcsLoading ? "Downloading…" : "Download"}
                 </button>
                 <button onClick={handleTdsTcsAllAccept} style={{ padding: "7px 16px", background: "linear-gradient(135deg,#38bdf8,#0ea5e9)", color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer", fontSize: "0.82rem", boxShadow: "0 2px 8px rgba(14,165,233,0.25)" }}>
                   All Accept
@@ -11794,16 +12718,23 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
                     </tr>
                   </thead>
                   <tbody>
+                    {tdsTcsUploadRows.length === 0 && (
+                      <tr>
+                        <td colSpan={10} style={{ padding: "18px", textAlign: "center", color: "#64748b", fontWeight: 600 }}>
+                          No accepted records yet — accept record(s) in Download, then move them here for upload.
+                        </td>
+                      </tr>
+                    )}
                     {tdsTcsUploadRows.map((row) => (
                       <tr key={row.id} style={{ borderBottom: "1px solid #e5e7eb" }}>
                         <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db" }}>{row.taxationType}</td>
                         <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db" }}>{row.gstin}</td>
                         <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "center" }}>{row.taxPeriod}</td>
-                        <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db" }}>{row.tradeName}</td>
+                        <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db" }}>{row.tradeName || "—"}</td>
                         <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "right" }}>{Number(row.taxableValue).toFixed(2)}</td>
                         <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "right" }}>{Number(row.igst).toFixed(2)}</td>
-                        <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "center" }}>{row.cgst}</td>
-                        <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "center" }}>{row.sgst}</td>
+                        <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "right" }}>{Number(row.cgst).toFixed(2)}</td>
+                        <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "right" }}>{Number(row.sgst).toFixed(2)}</td>
                         <td style={{
                           padding: "7px 10px",
                           borderRight: "1px solid #d1d5db",
@@ -11865,6 +12796,13 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
                     </tr>
                   </thead>
                   <tbody>
+                    {tdsTcsFilingRows.length === 0 && (
+                      <tr>
+                        <td colSpan={8} style={{ padding: "18px", textAlign: "center", color: "#64748b", fontWeight: 600 }}>
+                          No uploads yet — the filing summary builds from accepted records moved to Upload.
+                        </td>
+                      </tr>
+                    )}
                     {tdsTcsFilingRows.map((row) => (
                       <tr key={row.sl} style={{ borderBottom: "1px solid #e5e7eb" }}>
                         <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "center" }}>{row.sl}</td>
@@ -11873,8 +12811,8 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
                         <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "center" }}>{row.records}</td>
                         <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "right" }}>{Number(row.taxableValue).toFixed(2)}</td>
                         <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "right" }}>{Number(row.igst).toFixed(2)}</td>
-                        <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "center" }}>{row.cgst}</td>
-                        <td style={{ padding: "7px 10px", textAlign: "center" }}>{row.sgst}</td>
+                        <td style={{ padding: "7px 10px", borderRight: "1px solid #d1d5db", textAlign: "right" }}>{Number(row.cgst).toFixed(2)}</td>
+                        <td style={{ padding: "7px 10px", textAlign: "right" }}>{Number(row.sgst).toFixed(2)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -12646,6 +13584,42 @@ return (
         >
           Save
         </button>
+        {gstnReturnTypes[currentReturnType] && (
+          <>
+            <button
+              onClick={() => gstnSync("fetch")}
+              style={{
+                padding: "8px 20px",
+                background: "#0ea5e9",
+                color: "white",
+                border: "none",
+                borderRadius: 6,
+                fontWeight: 500,
+                fontSize: "0.9rem",
+                cursor: "pointer",
+                boxShadow: "0 2px 8px rgba(14,165,233,0.25)"
+              }}
+            >
+              ⬇ Fetch from GSTN
+            </button>
+            <button
+              onClick={() => gstnSync("save")}
+              style={{
+                padding: "8px 20px",
+                background: "#7c3aed",
+                color: "white",
+                border: "none",
+                borderRadius: 6,
+                fontWeight: 500,
+                fontSize: "0.9rem",
+                cursor: "pointer",
+                boxShadow: "0 2px 8px rgba(124,58,237,0.25)"
+              }}
+            >
+              ⬆ Save to GSTN
+            </button>
+          </>
+        )}
         <button
           style={{
             padding: "8px 28px",
@@ -13019,6 +13993,8 @@ return (
         </div>
 
         <button
+          onClick={handleGstnFetch}
+          disabled={fetchingGstn}
           onMouseEnter={(e) => {
             e.currentTarget.style.boxShadow = "0 14px 28px rgba(79,70,229,0.30)";
           }}
@@ -13035,12 +14011,13 @@ return (
             borderRadius: "10px",
             fontSize: "0.82rem",
             fontWeight: "700",
-            cursor: "pointer",
+            cursor: fetchingGstn ? "progress" : "pointer",
             transition: "all 0.25s ease",
             boxShadow: "0 6px 18px rgba(79,70,229,0.22)",
+            opacity: fetchingGstn ? 0.75 : 1,
           }}
         >
-          ⬇ Get Data From GSTN
+          {fetchingGstn ? "⏳ Fetching…" : "⬇ Get Data From GSTN"}
         </button>
       </div>
 
@@ -13092,7 +14069,10 @@ return (
               onChange={handleInputChange}
               style={inputStyle}
             >
-              <option>Uttar Pradesh</option>
+              <option value="">Select State</option>
+              {stateOptions.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
             </select>
           </div>
         </div>
@@ -13141,9 +14121,10 @@ return (
               onChange={handleInputChange}
               style={inputStyle}
             >
-              <option>Proprietorship</option>
-              <option>Partnership</option>
-              <option>Private Limited</option>
+              <option value="Select">Select</option>
+              {businessTypeOptions.map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
             </select>
           </div>
 
@@ -13155,9 +14136,8 @@ return (
               onChange={handleInputChange}
               style={inputStyle}
             >
-              <option>Select</option>
-              <option>Active</option>
-              <option>Inactive</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
             </select>
           </div>
         </div>
@@ -13206,8 +14186,10 @@ return (
               onChange={handleInputChange}
               style={inputStyle}
             >
-              <option>Normal</option>
-              <option>Composition</option>
+              <option value="">Select</option>
+              {taxpayerTypeOptions.map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
             </select>
           </div>
 
@@ -13306,7 +14288,7 @@ return (
       );
     }
     // ───────── DASHBOARD ─────────
-   return <GSTDashboardAllPanels initialSection={initialSection} />;
+   return <GSTDashboardAllPanels initialSection={initialSection} client={client} />;
   };
   return (
   <div
@@ -14574,9 +15556,7 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
   const [selectedYear, setSelectedYear] = useState(currentYear);
   const [selectedMonth, setSelectedMonth] = useState(today.getMonth());
   const [calendarCells, setCalendarCells] = useState([]);
-  const [reminders, setReminders] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("gst_cal_reminders") || "[]"); } catch { return []; }
-  });
+  const [reminders, setReminders] = useState([]);
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [reminderDay, setReminderDay] = useState(null);
   const [reminderText, setReminderText] = useState("");
@@ -14643,22 +15623,60 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
     setCalendarCells(cells);
   }, [selectedYear, selectedMonth]);
 
+  // Reminders are server-backed (GET/POST/DELETE /gst-app/reminders/).
+  // Backend fields: title, date, note, is_done.
+  useEffect(() => {
+    let cancelled = false;
+    apiFetchReminders()
+      .then((rows) => {
+        if (cancelled) return;
+        const list = Array.isArray(rows) ? rows : (rows && rows.results) || [];
+        setReminders(
+          list.map((r) => {
+            const d = r && r.date ? new Date(r.date) : null;
+            const ok = d && !Number.isNaN(d.getTime());
+            return {
+              id: r && r.id,
+              text: (r && (r.title || r.note)) || "",
+              year: ok ? d.getFullYear() : selectedYear,
+              month: ok ? d.getMonth() : selectedMonth,
+              day: ok ? d.getDate() : null,
+            };
+          })
+        );
+      })
+      .catch(() => setReminders([]));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const saveReminder = () => {
     if (!reminderText.trim()) return;
-    const newR = { day: reminderDay, month: selectedMonth, year: selectedYear, text: reminderText.trim(), id: Date.now() };
-    const updated = [...reminders, newR];
-    setReminders(updated);
-    localStorage.setItem("gst_cal_reminders", JSON.stringify(updated));
+    const text = reminderText.trim();
+    const y = selectedYear;
+    const m = selectedMonth;
+    const d = reminderDay;
     setReminderText("");
     setShowReminderModal(false);
-    setTimeout(() => { toast.success("Reminder saved!"); }, 150);
+    apiCreateReminder({
+      title: text,
+      date: `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
+      note: "",
+    })
+      .then((res) => {
+        const created = res && res.data ? res.data : null;
+        setReminders((prev) => [...prev, { id: created ? created.id : Date.now(), text, year: y, month: m, day: d }]);
+        toast.success("Reminder saved!");
+      })
+      .catch(() => toast.error("Could not save reminder"));
   };
 
   const deleteReminder = (id) => {
-    const updated = reminders.filter(r => r.id !== id);
-    setReminders(updated);
-    localStorage.setItem("gst_cal_reminders", JSON.stringify(updated));
-    setTimeout(() => { toast.success("Reminder deleted!"); }, 100);
+    setReminders((prev) => prev.filter((r) => r.id !== id));
+    apiDeleteReminder(id)
+      .then(() => toast.success("Reminder deleted!"))
+      .catch(() => toast.error("Could not delete reminder"));
   };
 
   const getDayReminders = (day) => reminders.filter(r => r.day === day && r.month === selectedMonth && r.year === selectedYear);
@@ -17329,24 +18347,42 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
   const NotificationsPage = ({ notifications = [], onMarkRead, onMarkAllRead }) => {
     const [filter, setFilter] = React.useState("all");
 
-    // Load reminders from localStorage (set from calendar)
-    const [calReminders, setCalReminders] = React.useState(() => {
-      try { return JSON.parse(localStorage.getItem("gst_cal_reminders") || "[]"); } catch { return []; }
-    });
+    // Reminders are server-backed (GET/DELETE /gst-app/reminders/).
+    const [calReminders, setCalReminders] = React.useState([]);
 
     // Reload reminders whenever this page is shown
     React.useEffect(() => {
-      try {
-        const saved = JSON.parse(localStorage.getItem("gst_cal_reminders") || "[]");
-        setCalReminders(saved);
-      } catch { setCalReminders([]); }
+      let cancelled = false;
+      apiFetchReminders()
+        .then((rows) => {
+          if (cancelled) return;
+          const list = Array.isArray(rows) ? rows : (rows && rows.results) || [];
+          setCalReminders(
+            list.map((r) => {
+              const d = r && r.date ? new Date(r.date) : null;
+              const ok = d && !Number.isNaN(d.getTime());
+              return {
+                id: r && r.id,
+                text: (r && (r.title || r.note)) || "",
+                year: ok ? d.getFullYear() : null,
+                month: ok ? d.getMonth() : null,
+                day: ok ? d.getDate() : null,
+                dateText: ok ? d.toISOString().slice(0, 10) : "",
+              };
+            })
+          );
+        })
+        .catch(() => setCalReminders([]));
+      return () => {
+        cancelled = true;
+      };
     }, []);
 
     const deleteCalReminder = (id) => {
-      const updated = calReminders.filter(r => r.id !== id);
-      setCalReminders(updated);
-      localStorage.setItem("gst_cal_reminders", JSON.stringify(updated));
-      toast.success("Reminder deleted!");
+      setCalReminders((prev) => prev.filter((r) => r.id !== id));
+      apiDeleteReminder(id)
+        .then(() => toast.success("Reminder deleted!"))
+        .catch(() => toast.error("Could not delete reminder"));
     };
 
     const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];

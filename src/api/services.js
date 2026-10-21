@@ -97,16 +97,30 @@ export const gstFiled = (params) => api.get("/gst-app/gst/filed/", { params });
 export const gstFilingStatus = (params) =>
   api.get("/gst-app/gst/filing-status/", { params }).then((r) => r.data);
 
+export const gstFilingSync = (data) =>
+  api.post("/gst-app/gst/filing-sync/", data).then((r) => r.data);
+
 export const gstRetSave = (data) => api.post("/gst-app/gst/ret-save/", data);
 
 export const gstRetSection = (params) =>
   api.get("/gst-app/gst/ret-section/", { params });
+
+export const gstTdsTcs = (params) => api.get("/gst-app/gst/tds-tcs/", { params });
+
+export const gstReportSummary = (params) =>
+  api.get("/gst-app/gst/report-summary/", { params });
 
 export const gstProfile = (params) => api.post("/gst-app/gst/profile/", params);
 
 export const gstLogout = (params) => api.post("/gst-app/gst/logout/", params);
 
 export const gstCredentials = () => api.get("/gst-app/gst/credentials/");
+
+export const gstLedger = (params) => api.get("/gst-app/gst/ledger/", { params });
+
+export const gstPayment = (params) => api.get("/gst-app/gst/payment/", { params });
+
+export const gstFo = (params) => api.get("/gst-app/gst/fo/", { params });
 
 // ── Dashboards ───────────────────────────────────────────────────────
 export const fetchUserDashboard = () =>
