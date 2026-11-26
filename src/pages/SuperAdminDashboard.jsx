@@ -2,73 +2,7 @@
 import React, { useState, useEffect } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import "../App.css";
-import { fetchSuperDashboard } from "../api/services";
-
-// Mock Data (Expanded)
-let mockFirms = [
-  { id: 1, name: "Sharma & Co", regDate: "2023-01-15", active: true, clients: 1248, activeSince: "2023-01-15", plan: "Pro", apiUsage: "1.2M calls", revenue: "₹1.42L" },
-  { id: 2, name: "Gupta Associates", regDate: "2022-05-20", active: true, clients: 987, activeSince: "2022-05-20", plan: "Enterprise", apiUsage: "980K calls", revenue: "₹1.18L" },
-  { id: 3, name: "Rajeshwari Tax", regDate: "2021-11-10", active: false, clients: 842, activeSince: null, plan: "Pro", apiUsage: "750K calls", revenue: "₹98k" },
-  { id: 4, name: "Verma Consultants", regDate: "2023-03-05", active: true, clients: 765, activeSince: "2023-03-05", plan: "Basic", apiUsage: "620K calls", revenue: "₹89k" },
-  { id: 5, name: "Singh Brothers", regDate: "2022-09-18", active: true, clients: 698, activeSince: "2022-09-18", plan: "Pro", apiUsage: "580K calls", revenue: "₹76k" },
-  { id: 6, name: "Patel Advisors", regDate: "2024-02-22", active: false, clients: 550, activeSince: null, plan: "Basic", apiUsage: "450K calls", revenue: "₹65k" },
-  { id: 7, name: "Khan & Partners", regDate: "2021-07-30", active: true, clients: 620, activeSince: "2021-07-30", plan: "Enterprise", apiUsage: "700K calls", revenue: "₹82k" },
-  { id: 8, name: "Agarwal Ltd", regDate: "2023-04-12", active: true, clients: 450, activeSince: "2023-04-12", plan: "Pro", apiUsage: "400K calls", revenue: "₹55k" },
-  { id: 9, name: "Mehta Group", regDate: "2022-12-01", active: false, clients: 300, activeSince: null, plan: "Basic", apiUsage: "250K calls", revenue: "₹40k" },
-  { id: 10, name: "Reddy Consultants", regDate: "2024-01-05", active: true, clients: 800, activeSince: "2024-01-05", plan: "Enterprise", apiUsage: "850K calls", revenue: "₹95k" },
-  { id: 11, name: "Chopra & Sons", regDate: "2021-06-15", active: true, clients: 950, activeSince: "2021-06-15", plan: "Pro", apiUsage: "900K calls", revenue: "₹1.05L" },
-  { id: 12, name: "Das Associates", regDate: "2023-08-20", active: false, clients: 400, activeSince: null, plan: "Basic", apiUsage: "350K calls", revenue: "₹50k" },
-  { id: 13, name: "Fernandez Tax", regDate: "2022-03-10", active: true, clients: 1100, activeSince: "2022-03-10", plan: "Enterprise", apiUsage: "1.1M calls", revenue: "₹1.25L" },
-  { id: 14, name: "Iyer Advisors", regDate: "2024-05-25", active: true, clients: 600, activeSince: "2024-05-25", plan: "Pro", apiUsage: "550K calls", revenue: "₹70k" },
-  { id: 15, name: "Joshi Partners", regDate: "2021-09-05", active: false, clients: 500, activeSince: null, plan: "Basic", apiUsage: "450K calls", revenue: "₹60k" },
-  { id: 16, name: "Kapoor & Co", regDate: "2023-11-15", active: true, clients: 1200, activeSince: "2023-11-15", plan: "Enterprise", apiUsage: "1.15M calls", revenue: "₹1.35L" },
-  { id: 17, name: "Lalwani Group", regDate: "2022-07-22", active: true, clients: 700, activeSince: "2022-07-22", plan: "Pro", apiUsage: "650K calls", revenue: "₹80k" },
-  { id: 18, name: "Malhotra Consultants", regDate: "2024-03-01", active: false, clients: 350, activeSince: null, plan: "Basic", apiUsage: "300K calls", revenue: "₹45k" },
-  { id: 19, name: "Nair Tax", regDate: "2021-12-10", active: true, clients: 850, activeSince: "2021-12-10", plan: "Enterprise", apiUsage: "800K calls", revenue: "₹1.00L" },
-  { id: 20, name: "Oberoi Advisors", regDate: "2023-02-18", active: true, clients: 1000, activeSince: "2023-02-18", plan: "Pro", apiUsage: "950K calls", revenue: "₹1.10L" },
-  // Add more if needed for larger pagination demo
-];
-
-// Mock clients based on firms
-const mockClients = mockFirms.flatMap(firm => 
-  Array.from({ length: firm.clients }, (_, i) => ({
-    id: `${firm.id}-${i + 1}`,
-    name: `Client ${i + 1} of ${firm.name}`,
-    regDate: firm.regDate,
-    firm: firm.name,
-  }))
-);
-
-// Mock API logs with status for success/failure
-const mockApiLogs = [
-  { id: 1, api: "/gst/verify", timestamp: "2025-12-17 10:15:23", timeTaken: "250ms", speed: "Fast", status: "Success" },
-  { id: 2, api: "/gst/file", timestamp: "2025-12-17 10:20:45", timeTaken: "420ms", speed: "Medium", status: "Success" },
-  { id: 3, api: "/gst/status", timestamp: "2025-12-17 10:25:12", timeTaken: "150ms", speed: "Fast", status: "Success" },
-  { id: 4, api: "/gst/verify", timestamp: "2025-12-17 10:30:34", timeTaken: "800ms", speed: "Slow", status: "Failed" },
-  { id: 5, api: "/gst/file", timestamp: "2025-12-17 10:35:56", timeTaken: "300ms", speed: "Fast", status: "Success" },
-  { id: 6, api: "/gst/status", timestamp: "2025-12-17 10:40:12", timeTaken: "950ms", speed: "Slow", status: "Failed" },
-  { id: 7, api: "/gst/verify", timestamp: "2025-12-17 10:45:34", timeTaken: "200ms", speed: "Fast", status: "Success" },
-  // Add more logs as needed
-];
-
-// Mock reports data for View All Reports
-const mockReports = [
-  { id: 1, name: "Monthly Revenue Report", date: "2025-12-01", type: "PDF", data: "Revenue details..." },
-  { id: 2, name: "API Usage Summary", date: "2025-12-05", type: "PDF", data: "API calls overview..." },
-  { id: 3, name: "Firm Activity Log", date: "2025-12-10", type: "PDF", data: "Firm actions..." },
-  // Add more
-];
-
-// Mock Security Alerts
-const mockSecurityAlerts = [
-  { id: 1, type: "Suspicious Login", time: "2025-12-17 09:45:00", ip: "192.168.1.100", description: "Unrecognized device from unknown location" },
-  { id: 2, type: "API Rate Limit Exceeded", time: "2025-12-17 10:05:00", ip: "192.168.1.101", description: "Excessive calls from single IP" },
-  { id: 3, type: "Invalid API Key", time: "2025-12-17 10:15:00", ip: "192.168.1.102", description: "Attempted access with expired key" },
-  { id: 4, type: "Data Breach Attempt", time: "2025-12-17 10:25:00", ip: "192.168.1.103", description: "SQL injection detected" },
-  { id: 5, type: "Unauthorized Access", time: "2025-12-17 10:35:00", ip: "192.168.1.104", description: "Failed admin login attempts" },
-  { id: 6, type: "DDoS Alert", time: "2025-12-17 10:45:00", ip: "Multiple", description: "High traffic from various sources" },
-  { id: 7, type: "Malware Detection", time: "2025-12-17 10:55:00", ip: "192.168.1.105", description: "Suspicious file upload" },
-];
+import { fetchSuperDashboard, fetchClients, fetchApiLogs } from "../api/services";
 
 export default function App() {
   const [audience, setAudience] = useState("All CA Firms");
@@ -88,50 +22,74 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const firmsPerPage = 10;
 
-  // Load live super-admin data from the Django backend (falls back to mocks)
+  const [firms, setFirms] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [apiLogs, setApiLogs] = useState([]);
+  const [securityAlerts, setSecurityAlerts] = useState([]);
+  const [reports, setReports] = useState([]);
+  const [meta, setMeta] = useState({});
+
+  // Load live super-admin data from the Django backend (no mock fallbacks).
   useEffect(() => {
     let cancelled = false;
-    fetchSuperDashboard()
-      .then((d) => {
-        if (cancelled) return;
-        if (Array.isArray(d.firms) && d.firms.length) {
-          const rows = d.firms.map((f) => ({
-            id: f.id,
-            name: f.name,
-            regDate: f.reg_date || "",
-            active: Boolean(f.is_active),
-            clients: f.client_count ?? 0,
-            activeSince: f.is_active ? (f.reg_date || "") : null,
-            plan: f.plan || "Basic",
-            apiUsage: "—",
-            revenue: "—",
-          }));
-          mockFirms.splice(0, mockFirms.length, ...rows);
-          // rebuild derived mockClients in place so stat drills stay accurate
-          mockClients.length = 0;
-          mockClients.push(
-            ...rows.flatMap((firm) =>
-              Array.from({ length: firm.clients }, (_, i) => ({
-                id: `${firm.id}-${i + 1}`,
-                name: `Client ${i + 1} of ${firm.name}`,
-                regDate: firm.regDate,
-                firm: firm.name,
-              }))
-            )
-          );
-        }
-        if (Array.isArray(d.security_alerts) && d.security_alerts.length) {
-          mockSecurityAlerts.length = 0;
-          mockSecurityAlerts.push(...d.security_alerts.map((a) => ({
-            id: a.id,
-            type: a.type,
-            time: a.time,
-            ip: a.ip || "—",
-            description: a.description || "",
-          })));
-        }
-      })
-      .catch(() => {});
+    Promise.all([
+      fetchSuperDashboard().catch(() => ({})),
+      fetchClients().catch(() => []),
+      fetchApiLogs().catch(() => []),
+    ]).then(([d, clientsRes, logsRes]) => {
+      if (cancelled) return;
+      setMeta(d || {});
+
+      setFirms(
+        (d.firms || []).map((f) => ({
+          id: f.id,
+          name: f.name,
+          regDate: f.reg_date || "",
+          active: Boolean(f.is_active),
+          clients: f.client_count ?? 0,
+          activeSince: f.is_active ? (f.reg_date || "") : null,
+          plan: f.plan || "—",
+          apiUsage: "—",
+          revenue: "—",
+        }))
+      );
+
+      const clientRows = clientsRes.results || clientsRes || [];
+      setClients(
+        clientRows.map((c) => ({
+          id: c.id,
+          name: c.name || c.trade_name || "",
+          regDate: c.reg_date || "",
+          firm: c.firm_name || "",
+        }))
+      );
+
+      const logRows = logsRes.results || logsRes || [];
+      setApiLogs(
+        logRows.map((l) => {
+          const ms = l.response_time_ms ?? null;
+          return {
+            id: l.id,
+            api: l.endpoint || l.api || "",
+            timestamp: l.created_at || "",
+            timeTaken: ms != null ? `${ms}ms` : "—",
+            speed: ms == null ? "—" : ms < 400 ? "Fast" : ms < 800 ? "Medium" : "Slow",
+            status: l.status || "—",
+          };
+        })
+      );
+
+      setSecurityAlerts(
+        (d.security_alerts || []).map((a) => ({
+          id: a.id,
+          type: a.type,
+          time: a.time,
+          ip: a.ip || "—",
+          description: a.description || "",
+        }))
+      );
+      setReports([]);
+    });
     return () => { cancelled = true; };
   }, []);
 
@@ -160,10 +118,10 @@ export default function App() {
     }, 500); // Sped up from 1500 to 500ms
   };
 
-  // Calculate stats from mock data
-  const totalFirms = mockFirms.length;
-  const activeFirms = mockFirms.filter(f => f.active).length;
-  const totalClients = mockFirms.reduce((sum, f) => sum + f.clients, 0);
+  // Calculate stats from live data
+  const totalFirms = meta.total_firms ?? firms.length;
+  const activeFirms = meta.active_firms ?? firms.filter(f => f.active).length;
+  const totalClients = meta.total_clients ?? firms.reduce((sum, f) => sum + (f.clients || 0), 0);
 
   const handleStatClick = (type) => {
     setSelectedStat(type);
@@ -174,13 +132,13 @@ export default function App() {
     let data = [];
     let columns = [];
     if (selectedStat === "totalFirms") {
-      data = mockFirms;
+      data = firms;
       columns = ["Name", "Registration Date"];
     } else if (selectedStat === "activeFirms") {
-      data = mockFirms.filter(f => f.active);
+      data = firms.filter(f => f.active);
       columns = ["Name", "Active Since", "Clients"];
     } else if (selectedStat === "totalClients") {
-      data = mockClients;
+      data = clients;
       columns = ["Name", "Firm", "Registration Date"];
     }
 
@@ -209,18 +167,21 @@ export default function App() {
   };
 
   // Pagination for All Firms Modal
-  const paginatedFirms = mockFirms.slice((firmsPage - 1) * firmsPerPage, firmsPage * firmsPerPage);
-  const totalPages = Math.ceil(mockFirms.length / firmsPerPage);
+  const paginatedFirms = firms.slice((firmsPage - 1) * firmsPerPage, firmsPage * firmsPerPage);
+  const totalPages = Math.max(1, Math.ceil(firms.length / firmsPerPage));
 
   // Top 10 Firms - Sorted by clients descending
-  const top10Firms = [...mockFirms].sort((a, b) => b.clients - a.clients).slice(0, 10);
+  const top10Firms = [...firms].sort((a, b) => b.clients - a.clients).slice(0, 10);
 
   // API Stats Calculations
-  const successCount = mockApiLogs.filter(log => log.status === "Success").length;
-  const failureCount = mockApiLogs.length - successCount;
-  const successRate = ((successCount / mockApiLogs.length) * 100).toFixed(1);
-  const failedApis = mockApiLogs.filter(log => log.status === "Failed");
-  const avgResponse = mockApiLogs.reduce((sum, log) => sum + parseInt(log.timeTaken), 0) / mockApiLogs.length + "ms";
+  const successCount = apiLogs.filter(log => String(log.status).toLowerCase() === "success").length;
+  const failureCount = apiLogs.length - successCount;
+  const successRate = apiLogs.length ? ((successCount / apiLogs.length) * 100).toFixed(1) : "0.0";
+  const failedApis = apiLogs.filter(log => String(log.status).toLowerCase() === "failed");
+  const avgResponseMs = apiLogs.length
+    ? Math.round(apiLogs.reduce((sum, log) => sum + (parseInt(log.timeTaken, 10) || 0), 0) / apiLogs.length)
+    : 0;
+  const avgResponse = apiLogs.length ? `${avgResponseMs}ms` : "—";
 
   // Pie Chart Data for Success Rate
   const pieData = [
@@ -246,7 +207,7 @@ export default function App() {
         </div>
         <div className="header-right">
           <div className="revenue">
-            <strong>₹84.6 Lakh</strong> <span className="up">↑ 28%</span>
+            <strong>—</strong>
           </div>
         </div>
       </div>
@@ -265,7 +226,7 @@ export default function App() {
           <h3>{totalClients.toLocaleString()}</h3><p>Total Clients</p>
         </div>
         <div className="box clickable" onClick={() => setApiDetailsModalOpen(true)}>
-          <h3>4.82M</h3><p>API Calls Today</p>
+          <h3>{meta.api_calls_today ?? 0}</h3><p>API Calls Today</p>
         </div>
       </div>
 
@@ -318,7 +279,7 @@ export default function App() {
               <tr><th>#</th><th>Firm Name</th><th>Clients</th><th>Revenue/Mo</th></tr>
             </thead>
             <tbody>
-              {mockFirms.slice(0, 5).map((firm, index) => (
+              {firms.slice(0, 5).map((firm, index) => (
                 <tr
                   key={firm.id}
                   className="clickable"
@@ -330,6 +291,9 @@ export default function App() {
                   <td>{firm.revenue}</td>
                 </tr>
               ))}
+              {firms.length === 0 && (
+                <tr><td colSpan={4} style={{ textAlign: "center" }}>No firms available.</td></tr>
+              )}
             </tbody>
           </table>
 
@@ -406,7 +370,7 @@ export default function App() {
                 <tr><th>Name</th><th>Plan</th><th>Actions</th></tr>
               </thead>
               <tbody>
-                {mockFirms.map(firm => (
+                {firms.map(firm => (
                   <tr key={firm.id}>
                     <td>{firm.name}</td>
                     <td>{firm.plan}</td>
@@ -416,6 +380,9 @@ export default function App() {
                     </td>
                   </tr>
                 ))}
+                {firms.length === 0 && (
+                  <tr><td colSpan={3} style={{ textAlign: "center" }}>No firms available.</td></tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -435,7 +402,7 @@ export default function App() {
                 <tr><th>Report Name</th><th>Date</th><th>Type</th><th>Action</th></tr>
               </thead>
               <tbody>
-                {mockReports.map(report => (
+                {reports.map(report => (
                   <tr key={report.id}>
                     <td>{report.name}</td>
                     <td>{report.date}</td>
@@ -443,6 +410,9 @@ export default function App() {
                     <td><button onClick={() => showToast(`Downloading ${report.name}.pdf`)}>Download PDF</button></td>
                   </tr>
                 ))}
+                {reports.length === 0 && (
+                  <tr><td colSpan={4} style={{ textAlign: "center" }}>No reports available.</td></tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -458,29 +428,35 @@ export default function App() {
               <button className="close-drawer" onClick={() => setApiMonitorModalOpen(false)}>×</button>
             </div>
             <div style={{ height: "300px", marginBottom: "20px" }}>
-              <ResponsiveContainer>
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={80}
-                    outerRadius={120}
-                    fill="#8884d8"
-                    paddingAngle={0}
-                    dataKey="value"
-                  >
-                    {pieData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-              <div style={{ textAlign: "center", marginTop: "-150px" }}>
-                <h2>{successRate}%</h2>
-                <p>Success Rate</p>
-              </div>
+              {apiLogs.length === 0 ? (
+                <p style={{ textAlign: "center", paddingTop: "120px" }}>No API activity available.</p>
+              ) : (
+                <>
+                  <ResponsiveContainer>
+                    <PieChart>
+                      <Pie
+                        data={pieData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={80}
+                        outerRadius={120}
+                        fill="#8884d8"
+                        paddingAngle={0}
+                        dataKey="value"
+                      >
+                        {pieData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div style={{ textAlign: "center", marginTop: "-150px" }}>
+                    <h2>{successRate}%</h2>
+                    <p>Success Rate</p>
+                  </div>
+                </>
+              )}
             </div>
             <p>Avg Response: {avgResponse} | Failures: {failureCount}</p>
             <h4>Failed APIs:</h4>
@@ -488,13 +464,14 @@ export default function App() {
               {failedApis.map(log => (
                 <li key={log.id}>{log.api} at {log.timestamp} ({log.timeTaken})</li>
               ))}
+              {failedApis.length === 0 && <li>No failed API calls.</li>}
             </ul>
             <table className="recent-audits">
               <thead>
                 <tr><th>API Endpoint</th><th>Timestamp</th><th>Time Taken</th><th>Speed</th><th>Status</th></tr>
               </thead>
               <tbody>
-                {mockApiLogs.map(log => (
+                {apiLogs.map(log => (
                   <tr key={log.id}>
                     <td>{log.api}</td>
                     <td>{log.timestamp}</td>
@@ -503,6 +480,9 @@ export default function App() {
                     <td>{log.status}</td>
                   </tr>
                 ))}
+                {apiLogs.length === 0 && (
+                  <tr><td colSpan={5} style={{ textAlign: "center" }}>No API logs available.</td></tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -531,7 +511,7 @@ export default function App() {
               </thead>
               <tbody>
                 {paginatedFirms
-                  .filter(firm => firm.name.toLowerCase().includes(searchQuery.toLowerCase()))
+                  .filter(firm => (firm.name || "").toLowerCase().includes(searchQuery.toLowerCase()))
                   .map(firm => (
                     <tr key={firm.id} className="clickable" onClick={() => setSelectedFirm(firm)}>
                       <td>{firm.id}</td>
@@ -541,6 +521,9 @@ export default function App() {
                       <td>{firm.plan}</td>
                     </tr>
                   ))}
+                {paginatedFirms.length === 0 && (
+                  <tr><td colSpan={5} style={{ textAlign: "center" }}>No firms available.</td></tr>
+                )}
               </tbody>
             </table>
             <div className="pagination">
@@ -574,6 +557,9 @@ export default function App() {
                     <td>{firm.plan}</td>
                   </tr>
                 ))}
+                {top10Firms.length === 0 && (
+                  <tr><td colSpan={5} style={{ textAlign: "center" }}>No firms available.</td></tr>
+                )}
               </tbody>
             </table>
           </div>

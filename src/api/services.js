@@ -107,6 +107,9 @@ export const gstRetSection = (params) =>
 
 export const gstTdsTcs = (params) => api.get("/gst-app/gst/tds-tcs/", { params });
 
+export const gstTdsCertificate = (params) =>
+  api.get("/gst-app/gst/tds-certificate/", { params }).then((r) => r.data);
+
 export const gstReportSummary = (params) =>
   api.get("/gst-app/gst/report-summary/", { params });
 
@@ -120,11 +123,11 @@ export const gstLedger = (params) => api.get("/gst-app/gst/ledger/", { params })
 
 export const gstPayment = (params) => api.get("/gst-app/gst/payment/", { params });
 
-export const gstFo = (params) => api.get("/gst-app/gst/fo/", { params });
+export const gstAato = (params) => api.get("/gst-app/gst/aato/", { params });
 
 // ── Dashboards ───────────────────────────────────────────────────────
-export const fetchUserDashboard = () =>
-  api.get("/gst-app/dashboard/user/").then((r) => r.data);
+export const fetchUserDashboard = (params = {}) =>
+  api.get("/gst-app/dashboard/user/", { params }).then((r) => r.data);
 
 export const fetchAdminDashboard = () =>
   api.get("/gst-app/dashboard/admin/").then((r) => r.data);

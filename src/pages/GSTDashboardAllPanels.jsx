@@ -10,14 +10,89 @@ import {
   HiOutlineDocumentReport
 } from "react-icons/hi";
 import { FaWhatsapp } from "react-icons/fa";
-import { gstFilingStatus, gstFilingSync, gstCredentials, gstSendOtp, gstAuthenticate, gstLogout, gstLedger, gstPayment, gstFo, fetchNotifications } from "../api/services";
+import { jsPDF } from "jspdf";
+import { gstFilingStatus, gstFilingSync, gstCredentials, gstSendOtp, gstAuthenticate, gstLogout, gstLedger, gstPayment, gstAato, gstTdsCertificate, fetchNotifications } from "../api/services";
 
 const errText = (e) =>
   (e && e.response && e.response.data && (e.response.data.detail || e.response.data.message)) ||
   (e && e.message) ||
   "Request failed";
 
+const friendlyApiMessage = (detail, fallback = "Live data is temporarily unavailable. Press Update to retry.") => {
+  const text = String(detail || "");
+  if (/AUT4033|Invalid Client ID|Forbidden|403/i.test(text)) {
+    return "This GST API is not enabled for the connected Vanaya client. Contact support.";
+  }
+  if (/AUTH113|Invalid Return Period/i.test(text)) {
+    return "Selected return period is invalid. Please choose another period.";
+  }
+  if (/RET11401|RET11402|AUTH158|Authentication Failed|Authorization Failed/i.test(text)) {
+    return "GSTN authentication failed for this request. Please reconnect and try again.";
+  }
+  if (/RET1140|RET11410|RET74513|RET13511|GEN5001/i.test(text)) {
+    return "The TDS certificate request was rejected. Please retry or contact support.";
+  }
+  if (/500|Server Error|502|503|504/i.test(text)) {
+    return "GST service is temporarily unavailable. Please try again.";
+  }
+  if (/RET13510|No Details Found/i.test(text)) {
+    return "No TDS details found for the selected period.";
+  }
+  if (/LG9029|LG9087|No Data Found|No Liabilities/i.test(text)) {
+    return "No data available for the selected period.";
+  }
+  if (/timeout|timed out/i.test(text)) {
+    return "GST service took too long to respond. Please try again.";
+  }
+  return fallback;
+};
+
+const isErrorPayload = (payload) => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (!payload.detail) return false;
+  const ignoredKeys = ["detail", "success", "gstn", "status_cd", "rek", "hmac", "data"];
+  const hasRealField = Object.keys(payload).some((key) => !ignoredKeys.includes(key));
+  const data = payload.data;
+  const dataEmpty =
+    data === undefined ||
+    data === null ||
+    (Array.isArray(data) && data.length === 0) ||
+    (isObj(data) && Object.keys(data).length === 0);
+  return !hasRealField && dataEmpty;
+};
+
 const liveBody = (r) => (r && r.data) || {};
+const hasPayload = (value) =>
+  !!value &&
+  typeof value === "object" &&
+  (Array.isArray(value) ? value.length > 0 : Object.keys(value).length > 0);
+
+const panelPayload = (live) => {
+  let value = live;
+  for (let i = 0; i < 2; i += 1) {
+    if (value && value.status_cd !== undefined && value.data !== undefined) {
+      value = value.data;
+      continue;
+    }
+    if (value && isObj(value.data)) {
+      value = value.data;
+      continue;
+    }
+    break;
+  }
+  return value;
+};
+
+const sumNumbers = (obj) =>
+  Object.values(obj || {}).reduce((total, value) => total + (Number(value) || 0), 0);
+
+const LEDGER_PART_LABELS = {
+  intr: "Interest",
+  oth: "Other",
+  tx: "Tax",
+  fee: "Fee",
+  pen: "Penalty",
+};
 
 // ─── Return filing / FY helpers (real calendar math, no hardcoded statuses) ──
 const RET_KEYS = { "GSTR-1": "GSTR1", "GSTR-1A": "GSTR1A", "GSTR-3B": "GSTR3B", "TDS/TCS": "TDS_TCS" };
@@ -37,6 +112,45 @@ const monthPeriods = (fy) => {
     const mm = ((i + 3) % 12) + 1;
     return `${String(mm).padStart(2, "0")}${i < 9 ? start : start + 1}`;
   });
+};
+
+const pad2 = (n) => String(n).padStart(2, "0");
+
+const lastCompletedMonth = () => {
+  const now = new Date();
+  return new Date(Date.UTC(now.getFullYear(), now.getMonth() - 1, 1));
+};
+
+const fyIsoDates = (fy) => {
+  const start = fyStart(fy);
+  if (start == null) return null;
+  const prev = lastCompletedMonth();
+  const prevEnd = new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth() + 1, 0));
+  const fromIso = new Date(Date.UTC(start, 3, 1));
+  const endIso = new Date(Date.UTC(start + 1, 2, 31));
+  const toIso = endIso < prevEnd ? endIso : prevEnd;
+  const slash = (d) => `${pad2(d.getUTCDate())}/${pad2(d.getUTCMonth() + 1)}/${d.getUTCFullYear()}`;
+  const dash = (d) => `${pad2(d.getUTCDate())}-${pad2(d.getUTCMonth() + 1)}-${d.getUTCFullYear()}`;
+  return { fr_dt: slash(fromIso), to_dt: slash(toIso), fm_dt: dash(fromIso), to_dt_dash: dash(toIso) };
+};
+
+const fyRetPeriod = (fy) => {
+  const periods = monthPeriods(fy);
+  if (!periods.length) return "";
+  const prev = lastCompletedMonth();
+  const limitYm = prev.getUTCFullYear() * 12 + prev.getUTCMonth();
+  let best = periods[0];
+  periods.forEach((period) => {
+    const ym = Number(period.slice(2)) * 12 + Number(period.slice(0, 2)) - 1;
+    if (ym <= limitYm) best = period;
+  });
+  return best;
+};
+
+const fyPeriodRange = (fy) => {
+  const periods = monthPeriods(fy);
+  if (!periods.length) return { fr_dt: "", to_dt: "" };
+  return { fr_dt: periods[0], to_dt: fyRetPeriod(fy) };
 };
 
 // Statutory due date (date in the following calendar month) for a FY's month.
@@ -179,7 +293,7 @@ function Gsheet({ data, depth = 0 }) {
 }
 
 // ─── Generic live-data table (used when GSTN returns data for a panel) ────────
-function LiveSheet({ body, gstin = "" }) {
+function LiveSheet({ body }) {
   const data = body && body.data;
   if (data === undefined || data === null) {
     return (
@@ -190,7 +304,6 @@ function LiveSheet({ body, gstin = "" }) {
   }
   return (
     <div style={{ overflow: "auto", padding: "10px 12px", boxSizing: "border-box" }}>
-      {body.status_cd && <div style={{ fontSize: "0.66rem", color: "#64748b", marginBottom: "6px" }}>status_cd: {body.status_cd}{gstin ? ` · ${gstin}` : ""}</div>}
       <Gsheet data={data} />
     </div>
   );
@@ -281,7 +394,7 @@ function Panel({ id, title, icon = "", color, onMaximize, scrollX = false, fixed
 }
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
-function MaximizedModal({ title, icon = "", color, onClose, scrollX = false, children }) {
+function MaximizedModal({ title, icon = "", color, onClose, onUpdate, scrollX = false, children }) {
   const accentColor = getAccentColor(color);
   return (
     <div onClick={onClose} style={{
@@ -310,7 +423,7 @@ function MaximizedModal({ title, icon = "", color, onClose, scrollX = false, chi
             <span style={{ color: accentColor, fontWeight: "800", fontSize: "1.1rem", letterSpacing: "0.2px" }}>{title}</span>
           </div>
           <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-            <button style={{
+            <button onClick={onUpdate} style={{
               background: "#ffffff", border: `1.5px solid ${accentColor}40`, color: accentColor,
               borderRadius: "8px", cursor: "pointer", padding: "6px 16px", fontWeight: "700", fontSize: "0.82rem",
               boxShadow: `0 1px 4px ${accentColor}15`,
@@ -330,9 +443,9 @@ function MaximizedModal({ title, icon = "", color, onClose, scrollX = false, chi
   );
 }
 
-function DlBtn({ label = "↓ Download PDF", color = "#ef4444" }) {
+function DlBtn({ label = "↓ Download PDF", color = "#ef4444", onClick }) {
   return (
-    <button style={{
+    <button onClick={onClick} style={{
       padding: "9px 20px", borderRadius: "10px", border: "none",
       background: `linear-gradient(135deg,${color},${color}cc)`,
       color: "white", fontSize: "0.84rem", fontWeight: "700", cursor: "pointer",
@@ -354,6 +467,369 @@ function DlFooter({ children }) {
     </div>
   );
 }
+
+const pdfValue = (value) =>
+  value !== null && typeof value === "object" ? JSON.stringify(value) : money(value);
+
+const downloadPdf = (title, body, gstin = "") => {
+  const raw = body && body.data !== undefined ? body.data : body;
+  const rows = Array.isArray(raw)
+    ? raw.map((value, index) => [String(index + 1), pdfValue(value)])
+    : Object.entries(raw || {}).map(([key, value]) => [label(key), pdfValue(value)]);
+  const doc = new jsPDF();
+  doc.setFontSize(14);
+  doc.text(title, 14, 18);
+  let y = 26;
+  if (gstin) {
+    doc.setFontSize(9);
+    doc.text(`GSTIN: ${gstin}`, 14, y);
+    y += 9;
+  }
+  doc.setFontSize(10);
+  rows.forEach(([key, value]) => {
+    const lines = doc.splitTextToSize(`${key}: ${value}`, 182);
+    doc.text(lines, 14, y);
+    y += lines.length * 6 + 2;
+    if (y > 276) {
+      doc.addPage();
+      y = 20;
+    }
+  });
+  doc.save(`${title.replace(/\s+/g, "_")}.pdf`);
+};
+
+const PDF_MARGIN = 14;
+const PDF_WIDTH = 182;
+
+const pdfAmount = (value) => money(value === undefined || value === null ? 0 : value);
+
+const pdfEnsureSpace = (doc, y, needed) => {
+  if (y + needed > 282) {
+    doc.addPage();
+    return 20;
+  }
+  return y;
+};
+
+const pdfTable = (doc, columns, rows, startY) => {
+  const rowHeight = 8;
+  let y = pdfEnsureSpace(doc, startY, rowHeight * 2);
+
+  doc.setFillColor(241, 245, 249);
+  doc.rect(PDF_MARGIN, y, PDF_WIDTH, rowHeight, "F");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(15, 23, 42);
+  let x = PDF_MARGIN + 2;
+  columns.forEach((col) => {
+    doc.text(col.label, col.align === "right" ? x + col.width - 4 : x, y + 5.2, {
+      align: col.align === "right" ? "right" : "left",
+    });
+    x += col.width;
+  });
+  y += rowHeight;
+
+  doc.setFont("helvetica", "normal");
+  rows.forEach((row, rowIndex) => {
+    y = pdfEnsureSpace(doc, y, rowHeight);
+    if (rowIndex % 2 === 1) {
+      doc.setFillColor(248, 250, 252);
+      doc.rect(PDF_MARGIN, y, PDF_WIDTH, rowHeight, "F");
+    }
+    let cellX = PDF_MARGIN + 2;
+    columns.forEach((col, colIndex) => {
+      doc.text(String(row[colIndex]), col.align === "right" ? cellX + col.width - 4 : cellX, y + 5.2, {
+        align: col.align === "right" ? "right" : "left",
+      });
+      cellX += col.width;
+    });
+    y += rowHeight;
+    doc.setDrawColor(226, 232, 240);
+    doc.line(PDF_MARGIN, y, PDF_MARGIN + PDF_WIDTH, y);
+  });
+
+  return y + 7;
+};
+
+const pdfSectionTitle = (doc, title, y) => {
+  const nextY = pdfEnsureSpace(doc, y, 16);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.setTextColor(15, 23, 42);
+  doc.text(title, PDF_MARGIN, nextY);
+  return nextY + 6;
+};
+
+const downloadLedgerPdf = (body, gstin = "") => {
+  const payload = panelPayload(body) || {};
+  const cash = payload.cash_bal || {};
+  const itc = payload.itc_bal || {};
+  const blocked = payload.itc_blck_bal || {};
+  const part = (head) => cash[head] || {};
+  const cashHeads = [
+    { name: "IGST", total: cash.igst_tot_bal, split: part("igst") },
+    { name: "CGST", total: cash.cgst_tot_bal, split: part("cgst") },
+    { name: "SGST", total: cash.sgst_tot_bal, split: part("sgst") },
+    { name: "Cess", total: cash.cess_tot_bal, split: part("cess") },
+  ];
+
+  const doc = new jsPDF();
+  doc.setFillColor(6, 95, 70);
+  doc.rect(0, 0, 210, 30, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(14);
+  doc.text("Electronic Ledger Balances", PDF_MARGIN, 14);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.text(`GSTIN: ${gstin || "—"}`, PDF_MARGIN, 22);
+  doc.setTextColor(15, 23, 42);
+
+  let y = 39;
+  y = pdfSectionTitle(doc, "Cash Balance", y);
+  y = pdfTable(
+    doc,
+    [
+      { label: "Tax Head", width: 34 },
+      { label: "Total Balance", width: 38, align: "right" },
+      { label: "Tax", width: 26, align: "right" },
+      { label: "Interest", width: 26, align: "right" },
+      { label: "Fee", width: 22, align: "right" },
+      { label: "Penalty", width: 22, align: "right" },
+      { label: "Other", width: 14, align: "right" },
+    ],
+    cashHeads.map((head) => [
+      head.name,
+      pdfAmount(head.total),
+      pdfAmount(head.split.tx),
+      pdfAmount(head.split.intr),
+      pdfAmount(head.split.fee),
+      pdfAmount(head.split.pen),
+      pdfAmount(head.split.oth),
+    ]),
+    y
+  );
+
+  y = pdfSectionTitle(doc, "Input Tax Credit Balance", y);
+  const itcColumns = [
+    { label: "Tax Head", width: 80 },
+    { label: "Available Balance (INR)", width: 102, align: "right" },
+  ];
+  y = pdfTable(doc, itcColumns, [
+    ["IGST", pdfAmount(itc.igst_bal)],
+    ["CGST", pdfAmount(itc.cgst_bal)],
+    ["SGST", pdfAmount(itc.sgst_bal)],
+    ["Cess", pdfAmount(itc.cess_bal)],
+    ["Total", pdfAmount(sumNumbers(itc))],
+  ], y);
+
+  y = pdfSectionTitle(doc, "Blocked Input Tax Credit", y);
+  y = pdfTable(doc, itcColumns, [
+    ["IGST", pdfAmount(blocked.igst_blck_bal)],
+    ["CGST", pdfAmount(blocked.cgst_blck_bal)],
+    ["SGST", pdfAmount(blocked.sgst_blck_bal)],
+    ["Cess", pdfAmount(blocked.cess_blck_bal)],
+    ["Total", pdfAmount(sumNumbers(blocked))],
+  ], y);
+
+  y = pdfEnsureSpace(doc, y, 12);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Generated: ${new Date().toLocaleString("en-IN")} · Source: GSTN live ledger (BAL)`, PDF_MARGIN, y + 4);
+  doc.save("Electronic_Ledger_Balances.pdf");
+};
+
+const PDF_MONTHS = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+const pdfPeriodLabel = (period) => {
+  const value = String(period || "");
+  if (!/^\d{6}$/.test(value)) return value || "—";
+  return `${PDF_MONTHS[Number(value.slice(0, 2))] || "—"} ${value.slice(2)}`;
+};
+
+const pdfCell = (value, width = 24) => {
+  const text = value === undefined || value === null || value === "" ? "—" : String(value);
+  const max = Math.max(6, Math.floor(width / 1.75));
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+};
+
+const pdfNum = (value) => Number(value) || 0;
+
+const pdfTdsGroupTotals = (groups) =>
+  (Array.isArray(groups) ? groups : []).reduce(
+    (acc, group) => {
+      const hasHead = group && (group.amt_ded !== undefined || group.oamt_ded !== undefined);
+      if (hasHead) {
+        acc.amtDed += pdfNum(group.amt_ded !== undefined ? group.amt_ded : group.oamt_ded);
+        acc.iamt += pdfNum(group.iamt);
+        acc.camt += pdfNum(group.camt);
+        acc.samt += pdfNum(group.samt);
+      }
+      (Array.isArray(group && group.inv) ? group.inv : []).forEach((invoice) => {
+        if (hasHead) return;
+        acc.amtDed += pdfNum(invoice.amt_ded !== undefined ? invoice.amt_ded : invoice.oamt_ded);
+        acc.iamt += pdfNum(invoice.iamt);
+        acc.camt += pdfNum(invoice.camt);
+        acc.samt += pdfNum(invoice.samt);
+      });
+      return acc;
+    },
+    { amtDed: 0, iamt: 0, camt: 0, samt: 0 }
+  );
+
+const downloadTdsCertificatePdf = (details, summary, gstin = "", period = "", legalName = "") => {
+  const data = panelPayload(details) || {};
+  const report = panelPayload(summary) || {};
+  const tds = Array.isArray(data.tds) ? data.tds : [];
+  const tdsa = Array.isArray(data.tdsa) ? data.tdsa : [];
+  const derived = {
+    tds: pdfTdsGroupTotals(tds),
+    tdsa: pdfTdsGroupTotals(tdsa),
+  };
+  const tdsSummary = report.tds || {};
+  const tdsaSummary = report.tdsa || {};
+  const currentTotals = {
+    amtDed: tdsSummary.ttl_amtDed !== undefined ? pdfNum(tdsSummary.ttl_amtDed) : derived.tds.amtDed,
+    iamt: tdsSummary.ttl_igst !== undefined ? pdfNum(tdsSummary.ttl_igst) : derived.tds.iamt,
+    camt: tdsSummary.ttl_cgst !== undefined ? pdfNum(tdsSummary.ttl_cgst) : derived.tds.camt,
+    samt: tdsSummary.ttl_sgst !== undefined ? pdfNum(tdsSummary.ttl_sgst) : derived.tds.samt,
+  };
+  const amendmentTotals = {
+    amtDed: tdsaSummary.ttl_amtDed !== undefined ? pdfNum(tdsaSummary.ttl_amtDed) : derived.tdsa.amtDed,
+    iamt: tdsaSummary.ttl_igst !== undefined ? pdfNum(tdsaSummary.ttl_igst) : derived.tdsa.iamt,
+    camt: tdsaSummary.ttl_cgst !== undefined ? pdfNum(tdsaSummary.ttl_cgst) : derived.tdsa.camt,
+    samt: tdsaSummary.ttl_sgst !== undefined ? pdfNum(tdsaSummary.ttl_sgst) : derived.tdsa.samt,
+  };
+
+  const doc = new jsPDF();
+  doc.setFillColor(22, 101, 52);
+  doc.rect(0, 0, 210, 34, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(14);
+  doc.text("TDS CERTIFICATE (GSTR-7A)", PDF_MARGIN, 14);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.text(`GSTIN: ${gstin || "—"}`, PDF_MARGIN, 22);
+  doc.text(`Period: ${pdfPeriodLabel(period)}`, PDF_MARGIN, 29);
+  doc.setTextColor(15, 23, 42);
+
+  let y = 43;
+  if (legalName) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    const nameLines = doc.splitTextToSize(`Taxpayer: ${legalName}`, PDF_WIDTH);
+    doc.text(nameLines, PDF_MARGIN, y);
+    y += nameLines.length * 5 + 4;
+  }
+  if (report.name) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.text(`Deductor: ${pdfCell(report.name, 120)}`, PDF_MARGIN, y);
+    y += 9;
+  }
+  if (report.arn) {
+    doc.text(`ARN: ${pdfCell(report.arn, 60)} · ARN Date: ${pdfCell(report.arn_dt, 30)}`, PDF_MARGIN, y);
+    y += 9;
+  }
+
+  y = pdfSectionTitle(doc, "Summary", y);
+  y = pdfTable(
+    doc,
+    [
+      { label: "Particulars", width: 62 },
+      { label: "TDS Deducted", width: 34, align: "right" },
+      { label: "IGST", width: 26, align: "right" },
+      { label: "CGST", width: 24, align: "right" },
+      { label: "SGST", width: 24, align: "right" },
+      { label: "Records", width: 12, align: "right" },
+    ],
+    [
+      ["TDS", pdfAmount(currentTotals.amtDed), pdfAmount(currentTotals.iamt), pdfAmount(currentTotals.camt), pdfAmount(currentTotals.samt), pdfCell(tdsSummary.no_rec !== undefined ? tdsSummary.no_rec : tds.length, 12)],
+      ["TDS Amendments", pdfAmount(amendmentTotals.amtDed), pdfAmount(amendmentTotals.iamt), pdfAmount(amendmentTotals.camt), pdfAmount(amendmentTotals.samt), pdfCell(tdsaSummary.no_rec !== undefined ? tdsaSummary.no_rec : tdsa.length, 12)],
+    ],
+    y
+  );
+
+  y = pdfSectionTitle(doc, "TDS Deduction Details", y);
+  const tdsRows = [];
+  tds.forEach((group) => {
+    const invoices = Array.isArray(group.inv) && group.inv.length ? group.inv : [null];
+    invoices.forEach((invoice) => {
+      tdsRows.push([
+        pdfCell(group.gstin_ded, 35),
+        pdfCell(invoice ? invoice.inum : group.inum, 26),
+        pdfCell(invoice ? invoice.idt : group.idt, 20),
+        pdfAmount(invoice ? invoice.ival : group.ival),
+        pdfAmount(invoice ? invoice.amt_ded : group.amt_ded),
+        pdfAmount(invoice ? invoice.camt : group.camt),
+        pdfAmount(invoice ? invoice.samt : group.samt),
+        pdfAmount(invoice ? invoice.iamt : group.iamt),
+      ]);
+    });
+  });
+  if (!tdsRows.length) {
+    tdsRows.push(["—", "—", "—", "0.00", "0.00", "0.00", "0.00", "0.00"]);
+  }
+  y = pdfTable(
+    doc,
+    [
+      { label: "Deductor GSTIN", width: 35 },
+      { label: "Invoice No", width: 26 },
+      { label: "Date", width: 20 },
+      { label: "Inv Value", width: 24, align: "right" },
+      { label: "TDS", width: 22, align: "right" },
+      { label: "CGST", width: 18, align: "right" },
+      { label: "SGST", width: 18, align: "right" },
+      { label: "IGST", width: 19, align: "right" },
+    ],
+    tdsRows,
+    y
+  );
+
+  if (tdsa.length) {
+    y = pdfSectionTitle(doc, "TDS Amendment Details", y);
+    const tdsaRows = [];
+    tdsa.forEach((group) => {
+      const invoices = Array.isArray(group.inv) && group.inv.length ? group.inv : [null];
+      invoices.forEach((invoice) => {
+        tdsaRows.push([
+          pdfCell(group.gstin_ded, 28),
+          pdfCell(group.ogstin_ded, 25),
+          pdfCell(group.omonth, 16),
+          pdfCell(invoice ? invoice.oinum || invoice.inum : group.oinum, 22),
+          pdfAmount(invoice ? invoice.amt_ded : group.amt_ded),
+          pdfAmount(invoice ? invoice.camt : group.camt),
+          pdfAmount(invoice ? invoice.samt : group.samt),
+          pdfAmount(invoice ? invoice.iamt : group.iamt),
+        ]);
+      });
+    });
+    y = pdfTable(
+      doc,
+      [
+        { label: "Deductor GSTIN", width: 28 },
+        { label: "Original GSTIN", width: 25 },
+        { label: "Month", width: 16 },
+        { label: "Invoice No", width: 22 },
+        { label: "TDS", width: 30, align: "right" },
+        { label: "CGST", width: 20, align: "right" },
+        { label: "SGST", width: 20, align: "right" },
+        { label: "IGST", width: 21, align: "right" },
+      ],
+      tdsaRows,
+      y
+    );
+  }
+
+  y = pdfEnsureSpace(doc, y, 12);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Generated: ${new Date().toLocaleString("en-IN")} · Source: GSTN GSTR-7 TDS details`, PDF_MARGIN, y + 4);
+  doc.save(`TDS_Certificate_GSTR7A_${period || "period"}_${gstin || "gstin"}.pdf`);
+};
 
 function DuePills({ small = false, fy = "" }) {
   const pills = [];
@@ -648,15 +1124,55 @@ function ReturnStatusContent({ expanded = false, fy = "", filed = {}, gstn = "di
   );
 }
 
+function LedgerCard({ label: cardLabel, value, tone = "#065f46", parts = null, expanded = false }) {
+  return (
+    <div style={{
+      background: "#fff", border: "1px solid #e2e8f0", borderRadius: "10px",
+      padding: expanded ? "12px 14px" : "8px 10px", boxSizing: "border-box", minWidth: 0,
+    }}>
+      <div style={{ fontSize: expanded ? "0.78rem" : "0.63rem", fontWeight: "800", color: "#64748b", letterSpacing: "0.4px", textTransform: "uppercase" }}>{cardLabel}</div>
+      <div style={{ marginTop: expanded ? "6px" : "3px", fontSize: expanded ? "1.22rem" : "0.88rem", fontWeight: "800", color: tone, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        ₹ {money(value === undefined || value === null ? 0 : value)}
+      </div>
+      {expanded && parts && (
+        <div style={{ marginTop: "10px", borderTop: "1px solid #eef2f7", paddingTop: "8px", display: "flex", flexDirection: "column", gap: "5px" }}>
+          {Object.entries(parts).map(([key, partValue]) => (
+            <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "0.72rem", color: "#64748b" }}>
+              <span>{LEDGER_PART_LABELS[key] || label(key)}</span>
+              <b style={{ color: "#334155", whiteSpace: "nowrap" }}>{money(partValue)}</b>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ElectronicLedgerContent({ expanded = false, gstin = "", live = null }) {
-  const ledgerLive = liveBody(live);
-  if (ledgerLive && ledgerLive.data !== undefined) {
+  const payload = panelPayload(live);
+  if (!hasPayload(payload)) {
+    return <EmptyPanel message="No electronic ledger data available. Press Update All to fetch from GSTN." expanded={expanded} />;
+  }
+  if (isErrorPayload(payload)) {
+    return (
+      <EmptyPanel
+        message={friendlyApiMessage(payload.detail, "No electronic ledger data available. Press Update All to fetch from GSTN.")}
+        expanded={expanded}
+      />
+    );
+  }
+
+  const cash = payload.cash_bal || {};
+  const itc = payload.itc_bal || {};
+  const blocked = payload.itc_blck_bal || {};
+  const sheetBody = { data: payload };
+  const hasLedger = hasPayload(cash) || hasPayload(itc) || hasPayload(blocked);
+
+  if (!hasLedger) {
     if (!expanded) {
       return (
-        <div style={{ padding: "6px 4px", height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
-          <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-            <LiveSheet body={ledgerLive} gstin={gstin} />
-          </div>
+        <div style={{ padding: "6px 4px", height: "100%", boxSizing: "border-box", overflow: "auto" }}>
+          <LiveSheet body={sheetBody} gstin={gstin} />
         </div>
       );
     }
@@ -667,21 +1183,116 @@ function ElectronicLedgerContent({ expanded = false, gstin = "", live = null }) 
           <div style={{ fontSize: "0.85rem", color: "#64748b" }}>GSTIN: {gstin || "—"} · Live Ledger Data</div>
         </div>
         <ECard style={{ padding: 0, overflow: "auto" }}>
-          <LiveSheet body={ledgerLive} gstin={gstin} />
+          <LiveSheet body={sheetBody} gstin={gstin} />
         </ECard>
-        <DlFooter><DlBtn label="↓ Download PDF" color="#065f46" /></DlFooter>
+        <DlFooter><DlBtn label="↓ Download PDF" color="#065f46" onClick={() => downloadLedgerPdf(payload, gstin)} /></DlFooter>
       </ExpandedSection>
     );
   }
 
-  return <EmptyPanel message="No electronic ledger data available. Press Update All to fetch from GSTN." expanded={expanded} />;
+  const cashCards = [
+    { key: "igst", label: "IGST", value: cash.igst_tot_bal, parts: cash.igst },
+    { key: "cgst", label: "CGST", value: cash.cgst_tot_bal, parts: cash.cgst },
+    { key: "sgst", label: "SGST", value: cash.sgst_tot_bal, parts: cash.sgst },
+    { key: "cess", label: "Cess", value: cash.cess_tot_bal, parts: cash.cess },
+  ];
+  const itcCards = [
+    { key: "itcIgst", label: "IGST ITC", value: itc.igst_bal },
+    { key: "itcCgst", label: "CGST ITC", value: itc.cgst_bal },
+    { key: "itcSgst", label: "SGST ITC", value: itc.sgst_bal },
+    { key: "itcCess", label: "Cess ITC", value: itc.cess_bal },
+  ];
+  const blockedCards = [
+    { key: "blkIgst", label: "IGST Blocked", value: blocked.igst_blck_bal },
+    { key: "blkCgst", label: "CGST Blocked", value: blocked.cgst_blck_bal },
+    { key: "blkSgst", label: "SGST Blocked", value: blocked.sgst_blck_bal },
+    { key: "blkCess", label: "Cess Blocked", value: blocked.cess_blck_bal },
+  ];
+
+  if (!expanded) {
+    return (
+      <div style={{ padding: "10px 12px", height: "100%", boxSizing: "border-box", overflow: "auto" }}>
+        <div style={{ fontSize: "0.66rem", fontWeight: "800", color: "#64748b", letterSpacing: "0.5px", textTransform: "uppercase" }}>Cash Balance</div>
+        <div style={{ marginTop: "6px", display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "6px" }}>
+          {cashCards.map((card) => (
+            <LedgerCard key={card.key} label={card.label} value={card.value} tone="#065f46" />
+          ))}
+        </div>
+        <div style={{ marginTop: "8px", display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "6px" }}>
+          <LedgerCard label="ITC Available" value={sumNumbers(itc)} tone="#1d4ed8" />
+          <LedgerCard label="ITC Blocked" value={sumNumbers(blocked)} tone="#b45309" />
+        </div>
+      </div>
+    );
+  }
+
+  const renderSection = (title, subtitle, cards, tone, withParts = false) => (
+    <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "16px" }}>
+      <div style={{ fontSize: "0.98rem", fontWeight: "800", color: "#0f172a" }}>{title}</div>
+      <div style={{ marginTop: "3px", marginBottom: "14px", fontSize: "0.78rem", color: "#64748b" }}>{subtitle}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "10px" }}>
+        {cards.map((card) => (
+          <LedgerCard
+            key={card.key}
+            label={card.label}
+            value={card.value}
+            tone={tone}
+            parts={withParts ? card.parts : null}
+            expanded
+          />
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <ExpandedSection>
+      <div style={{ marginBottom: "20px" }}>
+        <div style={{ fontSize: "1.15rem", fontWeight: "800", color: "#1e293b", marginBottom: "3px" }}>Electronic Ledger Balances</div>
+        <div style={{ fontSize: "0.85rem", color: "#64748b" }}>GSTIN: {gstin || "—"} · Live Ledger Data</div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+        {renderSection("Cash Balance", "Available balance by tax head with tax, interest, fee, penalty and other components", cashCards, "#065f46", true)}
+        {renderSection("Input Tax Credit Balance", "ITC available by tax head", itcCards, "#1d4ed8")}
+        {renderSection("Blocked Input Tax Credit", "ITC currently blocked by tax head", blockedCards, "#b45309")}
+      </div>
+      <DlFooter><DlBtn label="↓ Download PDF" color="#065f46" onClick={() => downloadLedgerPdf(payload, gstin)} /></DlFooter>
+    </ExpandedSection>
+  );
 }
 
-function SummaryContent({ expanded = false }) {
+function SummaryContent({ expanded = false, fy = "", gstin = "", legalName = "" }) {
+  const [downloading, setDownloading] = useState("");
+  const [downloadMsg, setDownloadMsg] = useState("");
+
+  const downloadTds = useCallback(async () => {
+    const period = fyRetPeriod(fy);
+    if (!period) {
+      setDownloadMsg("Select a financial year before downloading the TDS certificate.");
+      return;
+    }
+    setDownloading("tds");
+    setDownloadMsg("");
+    try {
+      const body = await gstTdsCertificate({ period, fy, gstin: gstin || undefined });
+      if (!body || body.success === false || body.gstn === "disconnected") {
+        throw new Error(friendlyApiMessage(body && body.detail, "Unable to fetch TDS details from GSTN."));
+      }
+      const detailMessage = body.detail ? friendlyApiMessage(body.detail, "") : "";
+      if (detailMessage) throw new Error(detailMessage);
+      downloadTdsCertificatePdf(body.details, body.summary, gstin, period, legalName);
+    } catch (error) {
+      setDownloadMsg(friendlyApiMessage(errText(error), "Unable to prepare the TDS certificate. Please try again."));
+    } finally {
+      setDownloading("");
+    }
+  }, [fy, gstin, legalName]);
+
   const items = [
-    { label: "GST Certificate", tag: "GST REG-06", bg: "#f8fbff", tagColor: "#4f46e5", dlColor: "#4f46e5" },
-    { label: "TDS Certificate", tag: "GSTR-7A",    bg: "#f7fff9", tagColor: "#16a34a", dlColor: "#16a34a" },
+    { key: "reg06", label: "GST Certificate", tag: "GST REG-06", bg: "#f8fbff", tagColor: "#4f46e5", dlColor: "#4f46e5", onClick: null },
+    { key: "tds", label: "TDS Certificate", tag: "GSTR-7A", bg: "#f7fff9", tagColor: "#16a34a", dlColor: "#16a34a", onClick: downloadTds },
   ];
+  const buttonLabel = (item) => (downloading === item.key ? "Preparing…" : expanded ? "↓ Download PDF" : "↓ PDF");
 
   if (!expanded) {
     return (
@@ -698,15 +1309,22 @@ function SummaryContent({ expanded = false }) {
                 <div style={{ fontWeight: "800", fontSize: "0.84rem", color: "#0f172a", lineHeight: "1.2" }}>{item.label}</div>
                 <div style={{ marginTop: "4px", display: "inline-flex", alignItems: "center", background: `${item.tagColor}12`, color: item.tagColor, border: `1px solid ${item.tagColor}22`, padding: "3px 8px", borderRadius: "999px", fontSize: "0.62rem", fontWeight: "800", whiteSpace: "nowrap" }}>{item.tag}</div>
               </div>
-              <button style={{ background: `linear-gradient(135deg, ${item.dlColor}, ${item.dlColor}cc)`, color: "#fff", border: "none", padding: "6px 12px", borderRadius: "8px", fontWeight: "800", cursor: "pointer", fontSize: "0.7rem", whiteSpace: "nowrap", flexShrink: 0 }}>↓ PDF</button>
+              <button
+                onClick={item.onClick || undefined}
+                disabled={!item.onClick || downloading === item.key}
+                title={item.onClick ? undefined : "REG-06 certificate API is not configured"}
+                style={{ background: `linear-gradient(135deg, ${item.dlColor}, ${item.dlColor}cc)`, color: "#fff", border: "none", padding: "6px 12px", borderRadius: "8px", fontWeight: "800", cursor: item.onClick ? "pointer" : "not-allowed", opacity: !item.onClick || downloading === item.key ? 0.55 : 1, fontSize: "0.7rem", whiteSpace: "nowrap", flexShrink: 0 }}
+              >{buttonLabel(item)}</button>
             </div>
           ))}
+          {downloadMsg && (
+            <div style={{ fontSize: "0.68rem", fontWeight: "600", color: "#b45309", padding: "0 2px" }}>{downloadMsg}</div>
+          )}
         </div>
       </div>
     );
   }
 
-  // ── EXPANDED ──
   return (
     <ExpandedSection>
       <div style={{ marginBottom: "24px" }}>
@@ -720,22 +1338,39 @@ function SummaryContent({ expanded = false }) {
               <div style={{ fontWeight: "800", fontSize: "1.05rem", color: "#0f172a", marginBottom: "8px" }}>{item.label}</div>
               <div style={{ display: "inline-flex", alignItems: "center", background: `${item.tagColor}12`, color: item.tagColor, border: `1px solid ${item.tagColor}30`, padding: "5px 12px", borderRadius: "999px", fontSize: "0.78rem", fontWeight: "800" }}>{item.tag}</div>
             </div>
-            <button style={{ background: `linear-gradient(135deg, ${item.dlColor}, ${item.dlColor}cc)`, color: "#fff", border: "none", padding: "12px 24px", borderRadius: "10px", fontWeight: "800", cursor: "pointer", fontSize: "0.88rem", whiteSpace: "nowrap", boxShadow: `0 3px 10px ${item.dlColor}44` }}>↓ Download PDF</button>
+            <button
+              onClick={item.onClick || undefined}
+              disabled={!item.onClick || downloading === item.key}
+              title={item.onClick ? undefined : "REG-06 certificate API is not configured"}
+              style={{ background: `linear-gradient(135deg, ${item.dlColor}, ${item.dlColor}cc)`, color: "#fff", border: "none", padding: "12px 24px", borderRadius: "10px", fontWeight: "800", cursor: item.onClick ? "pointer" : "not-allowed", opacity: !item.onClick || downloading === item.key ? 0.55 : 1, fontSize: "0.88rem", whiteSpace: "nowrap", boxShadow: `0 3px 10px ${item.dlColor}44` }}
+            >{buttonLabel(item)}</button>
           </ECard>
         ))}
+        {downloadMsg && (
+          <div style={{ fontSize: "0.8rem", fontWeight: "600", color: "#b45309" }}>{downloadMsg}</div>
+        )}
       </div>
     </ExpandedSection>
   );
 }
 
 function TurnoverContent({ expanded = false, gstin = "", live = null }) {
-  const turnoverLive = liveBody(live);
-  if (turnoverLive && turnoverLive.data !== undefined) {
+  const payload = panelPayload(live);
+  const sheetBody = { data: payload };
+  if (hasPayload(payload) && isErrorPayload(payload)) {
+    return (
+      <EmptyPanel
+        message={friendlyApiMessage(payload.detail, "No turnover data available. Press Update All to fetch from GSTN.")}
+        expanded={expanded}
+      />
+    );
+  }
+  if (hasPayload(payload)) {
     if (!expanded) {
       return (
         <div style={{ padding: "10px 12px", height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
           <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-            <LiveSheet body={turnoverLive} gstin={gstin} />
+            <LiveSheet body={sheetBody} gstin={gstin} />
           </div>
         </div>
       );
@@ -747,9 +1382,9 @@ function TurnoverContent({ expanded = false, gstin = "", live = null }) {
           <div style={{ fontSize: "0.85rem", color: "#64748b" }}>Estimated & Filed Turnover · GSTIN & PAN Level</div>
         </div>
         <ECard style={{ padding: 0, overflow: "auto" }}>
-          <LiveSheet body={turnoverLive} gstin={gstin} />
+          <LiveSheet body={sheetBody} gstin={gstin} />
         </ECard>
-        <DlFooter><DlBtn label="↓ Download PDF" color="#0369a1" /></DlFooter>
+        <DlFooter><DlBtn label="↓ Download PDF" color="#0369a1" onClick={() => downloadPdf("Turnover Summary", sheetBody, gstin)} /></DlFooter>
       </ExpandedSection>
     );
   }
@@ -758,12 +1393,21 @@ function TurnoverContent({ expanded = false, gstin = "", live = null }) {
 }
 
 function LiabilityContent({ expanded = false, gstin = "", live = null }) {
-  const liabilityLive = liveBody(live);
-  if (liabilityLive && liabilityLive.data !== undefined) {
+  const payload = panelPayload(live);
+  const sheetBody = { data: payload };
+  if (hasPayload(payload) && isErrorPayload(payload)) {
+    return (
+      <EmptyPanel
+        message={friendlyApiMessage(payload.detail, "No liability or ITC statement data available. Press Update All to fetch from GSTN.")}
+        expanded={expanded}
+      />
+    );
+  }
+  if (hasPayload(payload)) {
     if (!expanded) {
       return (
         <div style={{ padding: "5px 8px", height: "100%", boxSizing: "border-box", overflow: "auto" }}>
-          <LiveSheet body={liabilityLive} gstin={gstin} />
+          <LiveSheet body={sheetBody} gstin={gstin} />
         </div>
       );
     }
@@ -774,9 +1418,9 @@ function LiabilityContent({ expanded = false, gstin = "", live = null }) {
           <div style={{ fontSize: "0.85rem", color: "#64748b" }}>Liability & ITC Comparison · GSTR-3B vs GSTR-1/2B</div>
         </div>
         <ECard style={{ padding: 0, overflow: "auto" }}>
-          <LiveSheet body={liabilityLive} gstin={gstin} />
+          <LiveSheet body={sheetBody} gstin={gstin} />
         </ECard>
-        <DlFooter><DlBtn label="↓ Download PDF" color="#9a3412" /></DlFooter>
+        <DlFooter><DlBtn label="↓ Download PDF" color="#9a3412" onClick={() => downloadPdf("Liability Ledger", sheetBody, gstin)} /></DlFooter>
       </ExpandedSection>
     );
   }
@@ -787,39 +1431,55 @@ function LiabilityContent({ expanded = false, gstin = "", live = null }) {
 function PaymentContent({ expanded = false, gstin = "", legalName = "", tradeName = "", live = null }) {
   const [expandedRow, setExpandedRow] = useState(null);
   const [selectedDemand, setSelectedDemand] = useState(null);
+  const [demandSummaries, setDemandSummaries] = useState({});
 
+  const paymentBody = liveBody(live);
   const demands = (() => {
-    const body = liveBody(live);
-    const data = body && body.data;
-    if (Array.isArray(data)) {
-      return data.map((d, i) => ({
-        sr: i + 1,
-        date: money(d.date || d.dt || d.demandDate || "—"),
-        demandId: String(d.demandid || d.dmdid || d.demandId || d.dmdId || d.id || `DEM-${String(i + 1).padStart(4, "0")}`),
-        integrated: Number(d.igst || d.iGst || 0) || 0,
-        central: Number(d.cgst || d.cGst || 0) || 0,
-        state: Number(d.sgst || d.sGst || d.uT || 0) || 0,
-        cess: Number(d.cess || d.cEs || 0) || 0,
-        total: Number(d.total || 0) || 0,
-      }));
-    }
-    if (data && typeof data === "object" && Array.isArray(data.demands)) {
-      return data.demands.map((d, i) => ({
-        sr: i + 1,
-        date: money(d.date || d.dt || "—"),
-        demandId: String(d.demandid || d.dmdid || d.demandId || d.id || `DEM-${String(i + 1).padStart(4, "0")}`),
-        integrated: Number(d.igst || d.iGst || 0) || 0,
-        central: Number(d.cgst || d.cGst || 0) || 0,
-        state: Number(d.sgst || d.sGst || 0) || 0,
-        cess: Number(d.cess || 0) || 0,
-        total: Number(d.total || 0) || 0,
-      }));
-    }
-    return [];
+    const rows = Array.isArray(paymentBody)
+      ? paymentBody
+      : (paymentBody && Array.isArray(paymentBody.demands))
+        ? paymentBody.demands
+        : (paymentBody && paymentBody.data && Array.isArray(paymentBody.data.demands))
+          ? paymentBody.data.demands
+          : [];
+    return rows.map((d, i) => ({
+      sr: i + 1,
+      date: money(d.date || d.dt || d.demandDate || "—"),
+      demandId: String(d.demandid || d.dmdid || d.demandId || d.dmdId || d.id || `DEM-${String(i + 1).padStart(4, "0")}`),
+      integrated: Number(d.igst || d.iGst || 0) || 0,
+      central: Number(d.cgst || d.cGst || 0) || 0,
+      state: Number(d.sgst || d.sGst || d.uT || 0) || 0,
+      cess: Number(d.cess || d.cEs || 0) || 0,
+      total: Number(d.total || 0) || 0,
+      status: d.status || "",
+    }));
   })();
 
+  const toggleDemand = async (item) => {
+    setExpandedRow(expandedRow === item.sr ? null : item.sr);
+    if (expandedRow === item.sr || demandSummaries[item.demandId]) return;
+    try {
+      const res = await gstPayment({ action: "CHLLNSUM", cpin: item.demandId, gstin });
+      const raw = res && res.data;
+      const payload = raw && raw.status_cd !== undefined
+        ? raw.data
+        : (raw && Array.isArray(raw.data))
+          ? { detail: raw.detail || "No challan summary returned" }
+          : (raw || {});
+      setDemandSummaries((prev) => ({ ...prev, [item.demandId]: payload }));
+    } catch (e) {
+      setDemandSummaries((prev) => ({ ...prev, [item.demandId]: { detail: errText(e) } }));
+    }
+  };
+
   if (!demands.length) {
-    return <EmptyPanel message="No outstanding demands or payment records. Press Update All to fetch from GSTN." expanded={expanded} />;
+    const detail = paymentBody && paymentBody.detail;
+    return (
+      <EmptyPanel
+        message={detail ? friendlyApiMessage(detail, "Payment data is temporarily unavailable. Press Update All to retry.") : "No outstanding demands or payment records. Press Update All to fetch from GSTN."}
+        expanded={expanded}
+      />
+    );
   }
 
   // NOTE: renderInfoBar and renderTable are plain functions returning JSX (NOT React components).
@@ -858,7 +1518,7 @@ function PaymentContent({ expanded = false, gstin = "", legalName = "", tradeNam
                   <td align="center" style={{ padding: expanded ? "10px" : "6px" }}>{item.cess === 0 ? "—" : item.cess.toLocaleString()}</td>
                   <td align="center" style={{ padding: expanded ? "10px" : "6px", fontWeight: "700", color: "#3730a3" }}>{item.total.toLocaleString()}</td>
                   <td align="center" style={{ padding: expanded ? "10px" : "6px" }}>
-                    <button onClick={() => setExpandedRow(expandedRow === item.sr ? null : item.sr)} style={{ background: expandedRow === item.sr ? "linear-gradient(135deg,#475569,#64748b)" : "linear-gradient(135deg,#4f46e5,#6D4AFF)", color: "#fff", border: "none", padding: expanded ? "5px 14px" : "3px 9px", borderRadius: "6px", fontWeight: "700", cursor: "pointer", fontSize: expanded ? "0.8rem" : "0.67rem" }}>{expandedRow === item.sr ? "▲ Hide" : "▼ Details"}</button>
+                    <button onClick={() => toggleDemand(item)} style={{ background: expandedRow === item.sr ? "linear-gradient(135deg,#475569,#64748b)" : "linear-gradient(135deg,#4f46e5,#6D4AFF)", color: "#fff", border: "none", padding: expanded ? "5px 14px" : "3px 9px", borderRadius: "6px", fontWeight: "700", cursor: "pointer", fontSize: expanded ? "0.8rem" : "0.67rem" }}>{expandedRow === item.sr ? "▲ Hide" : "▼ Details"}</button>
                   </td>
                 </tr>
                 {expandedRow === item.sr && (
@@ -883,6 +1543,25 @@ function PaymentContent({ expanded = false, gstin = "", legalName = "", tradeNam
                           <div style={{ fontSize: expanded ? "0.9rem" : "0.77rem", color: "#475569" }}>Total Demand Amount</div>
                           <div style={{ fontWeight: "800", fontSize: expanded ? "1.15rem" : "0.96rem", color: "#3730a3" }}>₹ {item.total.toLocaleString()}</div>
                         </div>
+                        {(() => {
+                          const summary = demandSummaries[item.demandId];
+                          if (!summary || !Object.keys(summary).length) return null;
+                          return (
+                            <div style={{ background: "white", borderRadius: "8px", padding: expanded ? "12px 14px" : "8px 10px", marginBottom: "12px", border: "1px solid #e2e8f0" }}>
+                              <div style={{ fontWeight: "700", fontSize: expanded ? "0.88rem" : "0.73rem", color: "#3730a3", marginBottom: "8px" }}>Challan Summary — {summary.cpin || item.demandId}</div>
+                              {summary.detail ? (
+                                <div style={{ fontSize: expanded ? "0.8rem" : "0.68rem", color: "#b45309" }}>{summary.detail}</div>
+                              ) : (
+                                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "10px", fontSize: expanded ? "0.82rem" : "0.68rem", color: "#475569" }}>
+                                  <div>Status: <b>{money(summary.status)}</b></div>
+                                  <div>Paid: <b>{money(summary.pymnt_dt)}</b></div>
+                                  <div>Bank: <b>{money(summary.bank_nam)}</b></div>
+                                  <div>Total: <b>{money(summary.total_amt)}</b></div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
                         <div style={{ display: "flex", justifyContent: "flex-end" }}>
                           <button onClick={() => setSelectedDemand(item)} style={{ background: "linear-gradient(135deg,#4f46e5,#6D4AFF)", color: "#fff", border: "none", padding: expanded ? "9px 22px" : "7px 18px", borderRadius: "8px", fontWeight: "700", cursor: "pointer", fontSize: expanded ? "0.88rem" : "0.77rem" }}>💳 Pay Now</button>
                         </div>
@@ -1132,20 +1811,84 @@ export default function GSTDashboard({ initialSection, client }) {
     }
   }, []);
 
-  const refreshPanels = useCallback(async (gstin) => {
+  const refreshPanels = useCallback(async (gstin, fy) => {
     const q = gstin ? { gstin } : {};
+    const dates = fyIsoDates(fy) || {};
+    const retPeriod = fyRetPeriod(fy);
+    const periodRange = fyPeriodRange(fy);
     const tasks = [
-      ["ledger",   () => gstLedger({ action: "GETITC", ...q })],
-      ["ledgerCash", () => gstLedger({ action: "GETCASH", ...q })],
-      ["turnover", () => gstFo({ action: "GetGivenMetrics", ...q })],
-      ["returns",  () => gstFo({ action: "GetLatestReturns", ...q })],
-      ["payment",  () => gstPayment({ action: "STATUS", ...q })],
-      ["liability", () => gstPayment({ action: "LIAB_SYSTEM", ...q })],
-      ["notices",  () => fetchNotifications().then((r) => ({ notifications: r.data, source: "app" }))],
+      ["ledger", async () => {
+        try {
+          const res = await gstLedger({ action: "BAL", ret_period: retPeriod, ...q });
+          const raw = res && res.data;
+          return { data: raw && raw.status_cd !== undefined ? raw.data : raw };
+        } catch (e) {
+          return { data: { detail: errText(e) } };
+        }
+      }],
+      ["turnover", async () => {
+        try {
+          const res = await gstAato({ finyr: fy, ...q });
+          const raw = res && res.data;
+          return { data: raw && raw.status_cd !== undefined ? raw.data : raw };
+        } catch (e) {
+          return { data: { detail: errText(e) } };
+        }
+      }],
+      ["payment", async () => {
+        try {
+          const res = await gstPayment({ action: "CHLLNLST", fm_dt: dates.fm_dt, to_dt: dates.to_dt_dash, ...q });
+          const raw = res && res.data;
+          const payload = raw && raw.status_cd !== undefined ? raw.data : raw;
+          const list = (((payload && payload.challanList) || []).flat()).filter(Boolean);
+          const demands = list.map((d, i) => ({
+            sr: i + 1,
+            date: d.payment_dt || d.chln_cre_dt || "—",
+            demandId: d.cpin || d.cpin_no || `CH-${String(i + 1).padStart(4, "0")}`,
+            integrated: Number(d.igst_tot_amt || 0) || 0,
+            central: Number(d.cgst_tot_amt || 0) || 0,
+            state: Number(d.sgst_tot_amt || 0) || 0,
+            cess: Number(d.cess_tot_amt || 0) || 0,
+            total: Number(d.total_amt || 0) || 0,
+            status: d.status || "",
+          }));
+          return { data: { demands, detail: raw && raw.detail } };
+        } catch (e) {
+          return { data: { demands: [], detail: errText(e) } };
+        }
+      }],
+      ["liability", async () => {
+        let payload = null;
+        let detail = "";
+        try {
+          const res = await gstLedger({ action: "TAX", fr_dt: periodRange.fr_dt, to_dt: periodRange.to_dt, ...q });
+          const raw = res && res.data;
+          if (raw && raw.status_cd !== undefined) payload = raw.data;
+          else if (raw && typeof raw === "object" && raw.detail) detail = raw.detail;
+          else payload = raw;
+        } catch (e) {
+          detail = errText(e);
+        }
+        let balance = null;
+        try {
+          const bal = await gstLedger({ action: "TAXPAYABLE", ret_period: retPeriod, ret_type: "R3", ...q });
+          const raw = bal && bal.data;
+          if (raw && raw.status_cd !== undefined) balance = raw.data;
+          else if (raw && typeof raw === "object" && raw.detail) balance = null;
+          else balance = raw;
+        } catch {
+          balance = null;
+        }
+        const result = { ...(payload || {}) };
+        if (balance !== null && balance !== undefined) result.retLiabBalance = balance;
+        if (detail) result.detail = detail;
+        return { data: result };
+      }],
+      ["notices", () => fetchNotifications().then((r) => ({ data: { notifications: r.data, source: "app" } }))],
     ];
     const results = await Promise.all(
       tasks.map(async ([k, fn]) => {
-        try { return { k, v: (await fn()).data }; } catch { return { k, v: null }; }
+        try { return { k, v: await fn() }; } catch { return { k, v: null }; }
       })
     );
     setLive((prev) => {
@@ -1154,6 +1897,17 @@ export default function GSTDashboard({ initialSection, client }) {
       return next;
     });
   }, []);
+
+  const refreshTurnover = useCallback(async () => {
+    const q = dataGstin ? { gstin: dataGstin } : {};
+    try {
+      const res = await gstAato({ finyr: activeFY, ...q });
+      const raw = res && res.data;
+      setLive((prev) => ({ ...prev, turnover: { data: raw && raw.status_cd !== undefined ? raw.data : raw } }));
+    } catch (e) {
+      setLive((prev) => ({ ...prev, turnover: { data: { detail: errText(e) } } }));
+    }
+  }, [dataGstin, activeFY]);
 
   React.useEffect(() => {
     (async () => {
@@ -1166,7 +1920,7 @@ export default function GSTDashboard({ initialSection, client }) {
         if (initial) {
           setActiveGstin(initial);
           loadFiling(activeFY, initial);
-          refreshPanels(initial);
+          refreshPanels(initial, activeFY);
         } else {
           setGstnStatus("disconnected");
         }
@@ -1227,7 +1981,7 @@ export default function GSTDashboard({ initialSection, client }) {
     } catch {
       // Backend still refreshes the matrix from app data; show the grid anyway.
     }
-    await Promise.all([loadFiling(target, dataGstin), refreshPanels(dataGstin)]);
+    await Promise.all([loadFiling(target, dataGstin), refreshPanels(dataGstin, target)]);
     setUpdating(false);
   }, [updating, selectedFY, loadFiling, refreshPanels, dataGstin, client]);
 
@@ -1437,7 +2191,7 @@ export default function GSTDashboard({ initialSection, client }) {
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
       {maximizedPanel && (
-        <MaximizedModal title={maximizedPanel.title} icon={maximizedPanel.icon} color={maximizedPanel.color} scrollX={maximizedPanel.scrollX} onClose={() => setMaximized(null)}>
+        <MaximizedModal title={maximizedPanel.title} icon={maximizedPanel.icon} color={maximizedPanel.color} scrollX={maximizedPanel.scrollX} onClose={() => setMaximized(null)} onUpdate={maximizedPanel.id === "turnover" ? refreshTurnover : handleUpdateAll}>
           <maximizedPanel.ContentComp
             expanded={true}
             fy={activeFY}

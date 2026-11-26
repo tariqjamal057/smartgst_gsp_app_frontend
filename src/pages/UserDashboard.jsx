@@ -19,8 +19,55 @@ import { FaChevronLeft, FaChevronRight } from "react-icons/fa";
 import NewsAndUpdates from './NewsAndUpdates';
 import useNotificationSocket from "../hooks/useNotificationSocket";
 
-import { fetchClients, fetchClientStats, gstFilingStatus, gstSearch, fetchReturnSections, saveReturnSections, gstRetSection, gstTdsTcs, gstReportSummary, gstLedger, gstRetSave, fetchNotificationPreferences, updateNotificationPreferences, fetchPlans, fetchMySubscription, selectPlan, fetchPayments, fetchNotifications, markNotificationsRead, markAllNotificationsRead, fetchDashboardLinks, updateClient as apiUpdateClient, deleteClient as apiDeleteClient, fetchReminders as apiFetchReminders, createReminder as apiCreateReminder, deleteReminder as apiDeleteReminder } from "../api/services";
+import { fetchClients, fetchClientStats, fetchUserDashboard, gstFilingStatus, gstSearch, fetchReturnSections, saveReturnSections, gstRetSection, gstTdsTcs, gstReportSummary, gstLedger, gstRetSave, fetchNotificationPreferences, updateNotificationPreferences, fetchPlans, fetchMySubscription, selectPlan, fetchPayments, fetchNotifications, markNotificationsRead, markAllNotificationsRead, fetchDashboardLinks, updateClient as apiUpdateClient, deleteClient as apiDeleteClient, fetchReminders as apiFetchReminders, createReminder as apiCreateReminder, deleteReminder as apiDeleteReminder } from "../api/services";
 import AddClientModal from "../components/AddClientModal";
+
+const GST_TAXABLE_KEYS = ["taxableValue", "taxable_value", "taxablevalueb2cla", "taxablevalue", "taxable", "taxval", "totalValue", "netValue"];
+const GST_RATE_KEYS = ["gstRate", "rateB2CLA", "rate", "taxRate", "applicableTaxRateB2CLA", "applicableTaxRate", "applicablePercent"];
+const GST_STATE_KEYS = ["pos", "placeOfSupply", "state", "stateCode", "stateOfSupply", "supplyState"];
+const gstFieldValue = (row, keys) => {
+  if (!row) return "";
+  const lookup = {};
+  Object.keys(row).forEach((key) => {
+    lookup[String(key).toLowerCase().replace(/\s+/g, "")] = row[key];
+  });
+  for (const key of keys) {
+    const value = lookup[String(key).toLowerCase().replace(/\s+/g, "")];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return "";
+};
+const gstStateCode = (value) => String(value ?? "").trim().slice(0, 2).toUpperCase();
+const gstRatePercent = (value) => {
+  const text = String(value ?? "").trim();
+  if (!text) return 0;
+  if (text.includes("/")) {
+    const parts = text.split("/").map((v) => parseFloat(v)).filter((n) => Number.isFinite(n) && n > 0);
+    return parts.length ? Math.max(...parts) : 0;
+  }
+  const rate = parseFloat(text);
+  return Number.isFinite(rate) && rate > 0 ? rate : 0;
+};
+const splitGstTax = (row, ownGstin) => {
+  const next = { ...row };
+  const taxable = Number(gstFieldValue(next, GST_TAXABLE_KEYS) || 0);
+  if (!taxable) return next;
+  const rate = gstRatePercent(gstFieldValue(next, GST_RATE_KEYS)) / 100;
+  if (!rate) return next;
+  const tax = taxable * rate;
+  const partyState = gstStateCode(gstFieldValue(next, GST_STATE_KEYS));
+  const ownState = gstStateCode(ownGstin);
+  if (partyState && ownState && partyState !== ownState) {
+    next.igst = tax.toFixed(2);
+    next.cgst = "0.00";
+    next.sgst = "0.00";
+  } else if (ownState) {
+    next.cgst = (tax / 2).toFixed(2);
+    next.sgst = (tax / 2).toFixed(2);
+    next.igst = "0.00";
+  }
+  return next;
+};
 
 // ── Financial year helpers ─────────────────────────────────────────────
 // GST started in 2017-18; the FY list runs from 2017-18 up to the current
@@ -361,7 +408,8 @@ const GSTReturnPeriodSelection = ({
   selectedFY, setSelectedFY,
   selectedQuarter, setSelectedQuarter,
   selectedPeriod, setSelectedPeriod,
-  onSearch
+  onSearch,
+  client
 }) => (
   <div
     style={{
@@ -413,7 +461,7 @@ const GSTReturnPeriodSelection = ({
             borderRadius: "999px"
           }}
         >
-          GSTIN: 09ACNPU2195H1ZY
+          GSTIN: {client?.gstin || "—"}
         </span>
       </div>
 
@@ -1074,7 +1122,7 @@ const ReturnsSummaryScreen = ({ fy, quarter, period, onBack, onViewForm }) => {
 // ==============================================
 // Detailed GST View - Premium Compact UI + Dynamic Form
 // ==============================================
-const DetailedGSTView = ({ formType, fy, period, onBack }) => {
+const DetailedGSTView = ({ formType, fy, period, onBack, client }) => {
   const [selectedSection, setSelectedSection] = useState(null);
   const [records, setRecords] = useState({});
   const [showAddForm, setShowAddForm] = useState(false);
@@ -1130,12 +1178,13 @@ const DetailedGSTView = ({ formType, fy, period, onBack }) => {
   const updateItem = (index, field, value) => {
     const newItems = [...items];
     newItems[index][field] = value;
-    if (field === "taxableValue" && value !== "") {
-      const rate = newItems[index].rate / 100;
-      const half = (Number(value) * rate) / 2;
-      newItems[index].central = half.toFixed(2);
-      newItems[index].state = half.toFixed(2);
-      newItems[index].cess = 0;
+    if (["taxableValue", "rate", "pos"].includes(field)) {
+      const split = splitGstTax({ ...newItems[index], pos: form.pos }, client?.gstin);
+      newItems[index] = {
+        ...split,
+        central: split.cgst ?? 0,
+        state: split.sgst ?? 0,
+      };
     }
     setItems(newItems);
   };
@@ -1321,9 +1370,9 @@ const DetailedGSTView = ({ formType, fy, period, onBack }) => {
             gap: "10px",
             fontSize: "0.9rem"
           }}>
-            <div><strong>GSTIN:</strong> 09ACNPU2195H1ZY</div>
-            <div><strong>Legal:</strong> Mohd Umair</div>
-            <div><strong>Trade:</strong> U.A.F ENTERPRISE'S</div>
+            <div><strong>GSTIN:</strong> {client?.gstin || "—"}</div>
+            <div><strong>Legal:</strong> {client?.name || "—"}</div>
+            <div><strong>Trade:</strong> {client?.trade_name || client?.name || "—"}</div>
             <div><strong>FY:</strong> {fy}</div>
             <div><strong>Period:</strong> {period}</div>
             <div>
@@ -1331,13 +1380,13 @@ const DetailedGSTView = ({ formType, fy, period, onBack }) => {
               <span style={{
                 marginLeft: "8px",
                 padding: "4px 10px",
-                background: "#ecfdf5",
-                color: "#059669",
+                background: "#f1f5f9",
+                color: "#475569",
                 borderRadius: "6px",
                 fontWeight: 600,
                 fontSize: "0.85rem"
               }}>
-                Filed
+                —
               </span>
             </div>
           </div>
@@ -1891,7 +1940,7 @@ const DetailedGSTView = ({ formType, fy, period, onBack }) => {
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", margin: "24px 0" }}>
                     <div>
                       <label style={{ display: "block", marginBottom: "6px", fontWeight: 600, fontSize: "0.93rem" }}>POS *</label>
-                      <select value={form.pos} onChange={e => setForm({...form, pos: e.target.value})} style={{ width: "100%", padding: "11px 14px", borderRadius: "10px", border: "1px solid #cbd5e1" }}>
+                      <select value={form.pos} onChange={e => { const pos = e.target.value; setForm({...form, pos}); setItems(prev => prev.map(item => { const split = splitGstTax({ ...item, pos }, client?.gstin); return { ...split, central: split.cgst ?? 0, state: split.sgst ?? 0 }; })); }} style={{ width: "100%", padding: "11px 14px", borderRadius: "10px", border: "1px solid #cbd5e1" }}>
                         <option>09-Uttar Pradesh</option>
                         <option>07-Delhi</option>
                       </select>
@@ -2197,21 +2246,11 @@ const YourReturnsComponent = () => {
 
 
 
-  // Dummy data for GST Returns - sample clients with filing status
-  const gstFilingData = [
-    { sl: 1, name: "MODERN MASTER PUBLICATION", mobile: "8439393333", filingType: "Monthly", gstin: "09QACPS3544H1Z4", dateOfFiling: "2025-11-20"  },
-    { sl: 2, name: "M/s BHARAT KHADI UDYOG", mobile: "8279909897", filingType: "Monthly", gstin: "09AYCPA3837B1ZX", dateOfFiling: ""  },
-    { sl: 3, name: "N S TRADERS", mobile: "9811984956", filingType: "Monthly", gstin: "09BKBPS9165E1ZS", dateOfFiling: "2025-11-18" },
-    { sl: 4, name: "NEERAJ AGENCIES", mobile: "6395749804", filingType: "Monthly", gstin: "09BRXPR8342B1Z6", dateOfFiling: "", },
-    { sl: 5, name: "WOOD CRAFT FURNITURE", mobile: "9897024060", filingType: "Monthly", gstin: "09DILPS7916D1ZR", dateOfFiling: "2025-11-21" },
-    { sl: 6, name: "SHIFA HANDLOOM", mobile: "9870766390", filingType: "Monthly", gstin: "09COYPM9918R1ZA", dateOfFiling: ""   },
-    { sl: 7, name: "I R TEXTILES", mobile: "8979344241", filingType: "Monthly", gstin: "09ABBPI9410Q1Z9", dateOfFiling: "2025-11-19" },
-    { sl: 8, name: "META TRADING COMPANY", mobile: "8126645576", filingType: "Monthly", gstin: "09DQWPA8816B1ZL", dateOfFiling: ""  },
-    // Add more dummy data to make it longer
-  ];
   const [selectedReturnType, setSelectedReturnType] = useState("GSTR1");
-  const [selectedMonth, setSelectedMonth] = useState("Nov-2025");
-  const [filingList, setFilingList] = useState(gstFilingData);
+  const [selectedMonth, setSelectedMonth] = useState(() =>
+    new Date().toLocaleString("en-US", { month: "short", year: "numeric" }).replace(" ", "-")
+  );
+  const [filingList, setFilingList] = useState([]);
   const [filterView, setFilterView] = useState("all");
   const handleGo = () => {
     // Simulate fetching data for selected month and return type
@@ -2232,47 +2271,10 @@ const YourReturnsComponent = () => {
   });
   const filedCount = filingList.filter(item => item.status === "Filed").length;
   const notFiledCount = filingList.filter(item => item.status === "Not Filed").length;
-  const pendingVouchersData = [
-    { id: 1, clientName: "Client A", company: "ABC Corp", gstin: "27AAACC1001Z1", pan: "ABCDE1234F", mobile: "9876543210", voucherName: "Voucher #001", pendingSince: "2025-12-20" },
-    { id: 2, clientName: "Client B", company: "XYZ Ltd", gstin: "27AAACC1002Z2", pan: "ABCDE1235G", mobile: "9876543211", voucherName: "Voucher #002", pendingSince: "2025-12-22" },
-    { id: 3, clientName: "Client C", company: "Global Traders", gstin: "27AAACC1003Z3", pan: "ABCDE1236H", mobile: "9876543212", voucherName: "Voucher #003", pendingSince: "2025-12-23" },
-    { id: 4, clientName: "Client D", company: "Tech Solutions", gstin: "27AAACC1004Z4", pan: "ABCDE1237I", mobile: "9876543213", voucherName: "Voucher #004", pendingSince: "2025-12-24" },
-    { id: 5, clientName: "Client E", company: "Retail King", gstin: "27AAACC1005Z5", pan: "ABCDE1238J", mobile: "9876543214", voucherName: "Voucher #005", pendingSince: "2025-12-25" },
-    { id: 6, clientName: "Client F", company: "Company 6", gstin: "27AAACC1006Z6", pan: "ABCDE1239K", mobile: "9876543215", voucherName: "Voucher #006", pendingSince: "2025-12-26" },
-    { id: 7, clientName: "Client G", company: "Company 7", gstin: "27AAACC1007Z7", pan: "ABCDE1240L", mobile: "9876543216", voucherName: "Voucher #007", pendingSince: "2025-12-27" },
-  ];
-  const returnsDueData = [
-    { id: 1, clientName: "Client A", company: "ABC Corp", gstin: "27AAACC1001Z1", returnType: "GSTR-3B", dueDate: "2025-12-28" },
-    { id: 2, clientName: "Client B", company: "XYZ Ltd", gstin: "27AAACC1002Z2", returnType: "GSTR-1", dueDate: "2025-12-27" },
-    { id: 3, clientName: "Client C", company: "Global Traders", gstin: "27AAACC1003Z3", returnType: "GSTR-7", dueDate: "2025-12-29" },
-    { id: 4, clientName: "Client D", company: "Tech Solutions", gstin: "27AAACC1004Z4", returnType: "GSTR-3B", dueDate: "2025-12-26" },
-    { id: 5, clientName: "Client E", company: "Retail King", gstin: "27AAACC1005Z5", returnType: "GSTR-1", dueDate: "2025-12-25" },
-    { id: 6, clientName: "Client F", company: "Company 6", gstin: "27AAACC1006Z6", returnType: "GSTR-7", dueDate: "2025-12-30" },
-    { id: 7, clientName: "Client G", company: "Company 7", gstin: "27AAACC1007Z7", returnType: "GSTR-3B", dueDate: "2025-12-31" },
-  ];
-  const clientsNeedingAttentionData = [
-    { id: 1, company: "ABC Corp", issue: "Missing documents for Q4" },
-    { id: 2, company: "XYZ Ltd", issue: "Overdue payment" },
-    { id: 3, company: "Global Traders", issue: "GST reconciliation pending" },
-    { id: 4, company: "Tech Solutions", issue: "Audit query unresolved" },
-    { id: 5, company: "Retail King", issue: "ITC claim discrepancy" },
-    { id: 6, company: "Company 6", issue: "Return filing delay" },
-    { id: 7, company: "Company 7", issue: "Tax notice received" },
-    { id: 8, company: "Company 8", issue: "Vendor verification pending" },
-    { id: 9, company: "Company 9", issue: "Invoice mismatch" },
-    { id: 10, company: "Company 10", issue: "Compliance check required" },
-    { id: 11, company: "Company 11", issue: "Bank reconciliation pending" },
-    { id: 12, company: "Company 12", issue: "Expense report overdue" },
-  ];
-  const itcAvailableData = [
-    { id: 1, clientName: "Client A", company: "ABC Corp", gstin: "27AAACC1001Z1", pan: "ABCDE1234F", mobile: "9876543210", amount: "₹1.2 Cr" },
-    { id: 2, clientName: "Client B", company: "XYZ Ltd", gstin: "27AAACC1002Z2", pan: "ABCDE1235G", mobile: "9876543211", amount: "₹0.8 Cr" },
-    { id: 3, clientName: "Client C", company: "Global Traders", gstin: "27AAACC1003Z3", pan: "ABCDE1236H", mobile: "9876543212", amount: "₹0.9 Cr" },
-    { id: 4, clientName: "Client D", company: "Tech Solutions", gstin: "27AAACC1004Z4", pan: "ABCDE1237I", mobile: "9876543213", amount: "₹0.5 Cr" },
-    { id: 5, clientName: "Client E", company: "Retail King", gstin: "27AAACC1005Z5", pan: "ABCDE1238J", mobile: "9876543214", amount: "₹0.4 Cr" },
-    { id: 6, clientName: "Client F", company: "Company 6", gstin: "27AAACC1006Z6", pan: "ABCDE1239K", mobile: "9876543215", amount: "₹0.6 Cr" },
-    { id: 7, clientName: "Client G", company: "Company 7", gstin: "27AAACC1007Z7", pan: "ABCDE1240L", mobile: "9876543216", amount: "₹0.7 Cr" },
-  ];
+  const pendingVouchersData = [];
+  const returnsDueData = [];
+  const clientsNeedingAttentionData = [];
+  const itcAvailableData = [];
   const [allClients, setAllClients] = useState([]);
 
   // Clients load ONLY from the Django backend (single source of truth, no local cache)
@@ -3048,7 +3050,7 @@ const handleImportUpload = () => {
     return;
   }
 
-  processExcelUpload(selectedImportFile, selectedOptions);
+  handleImportFile(selectedImportFile);
 };
   
   
@@ -3317,54 +3319,6 @@ const handleImportUpload = () => {
     { id: "turnover", label: "Turnover" },
     { id: "liability", label: "Liability Ledger" },
     { id: "payment", label: "Demand" },
-  ];
-
-  const outstandingDemands = [
-    {
-      sr: 1,
-      date: "08/08/2023",
-      demandId: "ZD090823059933V",
-      integrated: 0,
-      central: 138155,
-      state: 138155,
-      cess: 0,
-    },
-    {
-      sr: 2,
-      date: "11/02/2025",
-      demandId: "ZD090225135860F",
-      integrated: 21130,
-      central: 42956,
-      state: 42956,
-      cess: 0,
-    },
-    {
-      sr: 3,
-      date: "30/12/2025",
-      demandId: "ZD091225534888T",
-      integrated: 0,
-      central: 634156,
-      state: 634156,
-      cess: 0,
-    },
-    {
-      sr: 4,
-      date: "15/01/2026",
-      demandId: "ZD090126784512K",
-      integrated: 45000,
-      central: 78000,
-      state: 78000,
-      cess: 1200,
-    },
-    {
-      sr: 5,
-      date: "22/03/2026",
-      demandId: "ZD090326912345L",
-      integrated: 12850,
-      central: 0,
-      state: 0,
-      cess: 0,
-    },
   ];
   const downloadClientTemplate = () => {
     const notes = [
@@ -4121,14 +4075,32 @@ const applyImportedSummaryByKey = (summaryKey, totals) => {
   }));
 };
 
-const syncImportedRowsToState = (sheetName, rows, worksheet) => {
+const computeGstTotals = (rows) => (rows || []).reduce((acc, row) => {
+  const taxable = Number(row?.taxableValue || row?.taxablevalue || row?.taxable || row?.totalValue || row?.netValue || row?.nilRated || row?.exempted || row?.nonGst || row?.grossAdvance || 0);
+  const igst = Number(row?.igst || 0);
+  const cgst = Number(row?.cgst || row?.central || 0);
+  const sgst = Number(row?.sgst || row?.state || 0);
+  const cess = Number(row?.cess || row?.cessAmount || 0);
+  return {
+    taxable: acc.taxable + taxable,
+    igst: acc.igst + igst,
+    cgst: acc.cgst + cgst,
+    sgst: acc.sgst + sgst,
+    cess: acc.cess + cess,
+    total: acc.total + (Number(row?.total) || taxable + igst + cgst + sgst + cess)
+  };
+}, { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 });
+
+const syncImportedRowsToState = (sheetName, rows, worksheet, ownGstin) => {
   const config = getImportStorageConfig(sheetName);
   if (!config || typeof config.setter !== "function") return;
 
-  const safeRows = Array.isArray(rows) ? rows : [];
-  config.setter(safeRows);
+  const normalizedRows = (Array.isArray(rows) ? rows : []).map((row) =>
+    splitGstTax(row, ownGstin)
+  );
+  config.setter(normalizedRows);
 
-  const totals = worksheet
+  let totals = worksheet
     ? getSheetSummaryTotals(worksheet)
     : {
         taxable: 0,
@@ -4138,6 +4110,21 @@ const syncImportedRowsToState = (sheetName, rows, worksheet) => {
         cess: 0,
         total: 0
       };
+
+  if (!Number(totals.taxable || totals.igst || totals.cgst || totals.sgst)) {
+    totals = normalizedRows.reduce(
+      (acc, row) => {
+        acc.taxable += Number(gstFieldValue(row, GST_TAXABLE_KEYS) || 0);
+        acc.igst += Number(row.igst || 0);
+        acc.cgst += Number(row.cgst || 0);
+        acc.sgst += Number(row.sgst || 0);
+        acc.cess += Number(row.cess || 0);
+        return acc;
+      },
+      { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 }
+    );
+    totals.total = totals.taxable + totals.igst + totals.cgst + totals.sgst + totals.cess;
+  }
 
   applyImportedSummaryByKey(config.summaryKey, totals);
 };
@@ -4918,8 +4905,9 @@ const [ecoSupplyAmendmentRows, setEcoSupplyAmendmentRows] = useState([{ sl: 1, n
   }
 ];
 
-const handleImportFile = async () => {
-  if (!uploadedFile) {
+const handleImportFile = async (fileArg) => {
+  const file = fileArg || uploadedFile;
+  if (!file) {
     alert("Please select a file first.");
     return;
   }
@@ -4932,7 +4920,7 @@ const handleImportFile = async () => {
   try {
     setIsUploading(true);
 
-    const buffer = await uploadedFile.arrayBuffer();
+    const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "array" });
 
     const workbookSections = getWorkbookImportOptions(workbook);
@@ -4964,7 +4952,7 @@ const handleImportFile = async () => {
       );
 
       if (!matchedSheetName) {
-        syncImportedRowsToState(option, [], null);
+        syncImportedRowsToState(option, [], null, client?.gstin);
         return;
       }
 
@@ -4979,12 +4967,16 @@ const handleImportFile = async () => {
           )
         : [];
 
-      syncImportedRowsToState(matchedSheetName, filteredRows, worksheet);
+      syncImportedRowsToState(matchedSheetName, filteredRows, worksheet, client?.gstin);
     });
 
     setActiveSubTab("Summary");
     setImportStep("sources");
     setUploadedFile(null);
+
+    if (currentReturnType && client?.id) {
+      persistReturnSections().catch(() => {});
+    }
 
     alert("Excel imported successfully.");
   } catch (error) {
@@ -8764,6 +8756,15 @@ if (reportName === "GSTR-2B ITC Reclaim Reports") {
 
 
    const currentColumns = tableColumns[isITC04 ? selectedItcTable : selectedSection] || [];
+   const summaryKeyForSelectedSection = () => {
+     const section = selectedSection || "";
+     if (section.includes("B2B") || section.includes("CDNRA")) return "b2b";
+     if (section.includes("B2C (Large)") || section.includes("CDNURA")) return "b2cLarge";
+     if (section.includes("B2C (Others)") || section.includes("Exports")) return "b2cOthers";
+     if (section.includes("HSN")) return "hsn";
+     if (section.includes("ECO")) return "eco";
+     return "";
+   };
    const getRowsAndSetter = () => {
   if (isITC04) {
     switch (selectedItcTable) {
@@ -8833,6 +8834,7 @@ if (reportName === "GSTR-2B ITC Reclaim Reports") {
       hsn: [hsnRows, setHsnRows],
       documents: [documentsRows, setDocumentsRows],
       eco: [ecoRows, setEcoRows],
+      outward: [outwardSupplies, setOutwardSupplies],
       summaryTotals: [summaryTotals, setSummaryTotals],
       b2bAmendment: [b2bAmendmentRows, setB2bAmendmentRows],
       exportAmendment: [exportAmendmentRows, setExportAmendmentRows],
@@ -8853,6 +8855,21 @@ if (reportName === "GSTR-2B ITC Reclaim Reports") {
       advanceReceivedAmendment: [advanceReceivedAmendmentRows, setAdvanceReceivedAmendmentRows],
       advanceAdjustmentAmendment: [advanceAdjustmentAmendmentRows, setAdvanceAdjustmentAmendmentRows],
       ecoSupplyAmendment: [ecoSupplyAmendmentRows, setEcoSupplyAmendmentRows],
+    };
+    const recomputeSummaryTotals = () => {
+      if (isGSTR3B || isITC04 || isTDSTCS || isReports || isDownloadCenter) return;
+      const next = {};
+      Object.entries(GSTR1_SECTIONS).forEach(([id, [value]]) => {
+        if (id === "summaryTotals") return;
+        const summaryKey = getImportStorageConfig(id)?.summaryKey;
+        if (!summaryKey) return;
+        const totals = computeGstTotals(Array.isArray(value) ? value : []);
+        if (!next[summaryKey]) next[summaryKey] = { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, total: 0 };
+        ["taxable", "igst", "cgst", "sgst", "cess", "total"].forEach((field) => {
+          next[summaryKey][field] += totals[field];
+        });
+      });
+      setSummaryTotals((prev) => ({ ...prev, ...next }));
     };
     const GSTR3B_SECTIONS = {
       outward: [outwardSupplies, setOutwardSupplies],
@@ -8885,6 +8902,7 @@ if (reportName === "GSTR-2B ITC Reclaim Reports") {
       "12 - HSN-wise summary of outward supplies": ["hsn"],
       "13 - Documents Issued": ["documents"],
       "14 - Supplies made through ECO": ["eco"],
+      "15 - Supplies U/s 9(5)": ["outward"],
       "16 - B2B Amendment": ["b2bAmendment"],
       "17 - Export Amendment": ["exportAmendment"],
       "18 - ECO B2B": ["ecoB2b"],
@@ -8939,7 +8957,7 @@ if (reportName === "GSTR-2B ITC Reclaim Reports") {
       eco: "ECOM", ecoB2b: "ECOM", ecoUrpB2b: "ECOM", ecoB2c: "ECOM",
       ecoUrpB2c: "ECOM", ecoAmendmentB2b: "ECOM", ecoAmendmentB2c: "ECOM",
       ecoAmendmentUrpB2b: "ECOM", ecoUrp2cAmendment: "ECOM",
-      ecoSupplyAmendment: "SUPECOA", exportAmendment: "EXPA", summaryTotals: "SUM",
+      ecoSupplyAmendment: "SUPECOA", exportAmendment: "EXPA", outward: "SUPECO", summaryTotals: "SUM",
     };
     const gstr1gstnNameOverride = {
       "3 - Exports Invoices": "EXP",
@@ -8948,7 +8966,24 @@ if (reportName === "GSTR-2B ITC Reclaim Reports") {
       "8 - 11A(1), 11A(2) - Tax Liability (Advances Received)": "AT",
       "9 - 11B Adjustment of Advances": "AT",
     };
-    const gstr3bgstnCodes = { outward: "3bsummary", ecoSupplies: "3bsummary" };
+    const itc04GstnCodes = {
+      itc04_t4: "m2jw",
+      itc04_5a: "table5A",
+      itc04_5b: "table5B",
+      itc04_5c: "table5C",
+    };
+    const gstr3bgstnCodes = {
+      outward: "sup_details",
+      ecoSupplies: "eco_dtls",
+      interstateUnregistered: "inter_sup",
+      interstateComposition: "inter_sup",
+      interstateUin: "inter_sup",
+      itc: "itc_elg",
+      exempt: "inward_sup",
+      interestLateFee: "intr_ltfee",
+      paymentCash: "payment",
+      paymentCredit: "payment"
+    };
     const gstnNum = (v) => { const n = Number(v); return Number.isFinite(n) && n !== 0 ? n : undefined; };
     const gstnRowToUi = (r) => {
       if (!r || typeof r !== "object") return null;
@@ -9047,9 +9082,9 @@ if (reportName === "GSTR-2B ITC Reclaim Reports") {
         const ids = currentSectionIds();
         const activeId = Array.isArray(ids) ? ids[0] : ids;
         const code = isITC04
-          ? activeId
+          ? (itc04GstnCodes[activeId] || activeId)
           : isGSTR3B
-            ? (gstr3bgstnCodes[activeId] || "3bsummary")
+            ? (gstr3bgstnCodes[activeId] || "sup_details")
             : (gstr1gstnNameOverride[selectedSection] || gstr1gstnCodes[activeId]);
         if (!activeId || !code) {
           toast.error(`No GSTN section code mapped for «${selectedSection}».`);
@@ -9183,35 +9218,29 @@ if (reportName === "GSTR-2B ITC Reclaim Reports") {
     };
     const updateCell = (index, key, value) => {
       const newRows = [...rows];
-      newRows[index][key] = value;
+      newRows[index] = { ...newRows[index], [key]: value };
+      const k = String(key || "").toLowerCase().replace(/\s+/g, "");
+      if ([...GST_TAXABLE_KEYS, ...GST_RATE_KEYS, ...GST_STATE_KEYS].includes(k)) {
+        newRows[index] = splitGstTax(newRows[index], client?.gstin);
+      }
       setRows(newRows);
+      const summaryKey = summaryKeyForSelectedSection();
+      if (summaryKey) applyImportedSummaryByKey(summaryKey, computeGstTotals(newRows));
     };
     const deleteRow = (index) => {
       if (rows.length > 1) setRows(rows.filter((_, i) => i !== index));
     };
     const handleSave = () => {
-      let taxable = 0, igst = 0, cgst = 0, sgst = 0, cess = 0, total = 0;
-      rows.forEach(row => {
-        taxable += Number(row.taxableValue || row.taxable || row.totalValue || row.netValue || row.nilRated || row.exempted || row.nonGst || row.grossAdvance || 0);
-        igst += Number(row.igst || 0);
-        cgst += Number(row.cgst || 0);
-        sgst += Number(row.sgst || 0);
-        cess += Number(row.cess || 0);
-        total += Number(row.total || (taxable + igst + cgst + sgst + cess));
-      });
-      let key = "";
-      if (selectedSection && selectedSection.includes("B2B")) key = "b2b";
-      else if (selectedSection && selectedSection.includes("B2C (Large)")) key = "b2cLarge";
-      else if (selectedSection && selectedSection.includes("B2C (Others)")) key = "b2cOthers";
-      else if (selectedSection && selectedSection.includes("HSN")) key = "hsn";
+      const totals = computeGstTotals(rows);
+      const key = summaryKeyForSelectedSection();
+      if (key) applyImportedSummaryByKey(key, totals);
       const ids = currentSectionIds();
       if (ids) {
         persistReturnSections(ids).then((r) => {
           if (r) toast.success(`${currentReturnType} section saved to backend (Portal).`);
         });
       }
-      if (key && total > 0) {
-        
+      if (key && totals.total > 0) {
         alert("Saved successfully!");
       }
     };
@@ -9744,7 +9773,7 @@ const updateInterstateCell = (setter, rows, index, field, value) => {
   ].map((tab, index, array) => (
     <React.Fragment key={tab.id}>
       <button
-        onClick={() => setActiveSubTab(tab.id)}
+        onClick={() => { if (tab.id === "Summary") recomputeSummaryTotals(); setActiveSubTab(tab.id); }}
         onMouseEnter={(e) => {
           // Hover karne par inactive text halka dark hoga
           if (activeSubTab !== tab.id) e.currentTarget.style.color = isGSTR3B ? "#1d4ed8" : "#0f172a";
@@ -15580,6 +15609,20 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
     return () => { cancelled = true; };
   }, []);
 
+  // Live dashboard feed: filing matrix, overdue notices, return mismatches and
+  // the year-wise client-growth chart. All derived from rows stored by this app.
+  const [dashData, setDashData] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    const now = new Date();
+    const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    const fy = `${fyStart}-${String(fyStart + 1).slice(-2)}`;
+    fetchUserDashboard({ fy })
+      .then((data) => { if (!cancelled) setDashData(data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   const [importantLinks, setImportantLinks] = useState([]);
   const [importantPortals, setImportantPortals] = useState([]);
   useEffect(() => {
@@ -15701,39 +15744,33 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
   const cardActiveNew = s.active_new_this_month ?? activeThisMonth;
   const cardInactiveNew = s.inactive_new_this_month ?? inactiveThisMonth;
 
-  const noticesData = [
-    { id: 1, client: "National Grafics & Signage", type: "SCN", typeColor: "#ef4444", typeBg: "#fef2f2", date: "12 Apr 2026", amount: "₹45,200", borderColor: "#ef4444" },
-    { id: 2, client: "Bismi Enterprises", type: "DRC-01", typeColor: "#f59e0b", typeBg: "#fffbeb", date: "05 Apr 2026", amount: "₹18,750", borderColor: "#f59e0b" },
-    { id: 3, client: "The Olympic Sports", type: "Order", typeColor: "#6D4AFF", typeBg: "#f3f0ff", date: "28 Mar 2026", amount: "₹62,100", borderColor: "#6D4AFF" },
-    { id: 4, client: "Taxmate Technology Pvt Ltd", type: "SCN", typeColor: "#ef4444", typeBg: "#fef2f2", date: "20 Mar 2026", amount: "₹1,23,000", borderColor: "#ef4444" },
-  ];
+  // All widgets below are driven by the live dashboard feed. No sample rows:
+  // when the feed is empty the UI shows zeros / an empty state.
+  const liveGrowth = dashData && dashData.client_growth;
+  const liveYears = (liveGrowth && liveGrowth.years) || [];
+  const liveValues = (liveGrowth && liveGrowth.values) || [];
 
-  const highRiskData = [
-    { id: 1, gstin: "Royal Spents", mismatch: "GSTR-3B vs GSTR-2A", amount: "₹1,20,520", year: "2026-27", borderColor: "#f59e0b", amountColor: "#d97706", tags: ["ITC Mismatch"], risk: "High Risk", riskColor: "#ef4444", riskBg: "#fef2f2" },
-    { id: 2, gstin: "Bismi Enterprises", mismatch: "GSTR-3B vs GSTR-1", amount: "₹15,320", year: "2026-27", borderColor: "#f59e0b", amountColor: "#d97706", tags: ["GSTR-3B vs GSTR-1"], risk: "High Risk", riskColor: "#ef4444", riskBg: "#fef2f2" },
-    { id: 3, gstin: "Taxmate Technology\nPvt Ltd", mismatch: "GSTR-3B vs GSTR-2B", amount: "₹3,20,850", year: "2026-27", borderColor: "#ef4444", amountColor: "#ef4444", tags: ["GSTR-3B vs GSTR-2B"], risk: "Critical", riskColor: "#dc2626", riskBg: "#fef2f2" },
-    { id: 4, gstin: "Sai Traders", mismatch: "GSTR-2 vs GSTR-2B", amount: "₹85,880", year: "2026-27", borderColor: "#94a3b8", amountColor: "#d97706", tags: ["GSTR-2 vs GSTR-2B"], risk: "Medium Risk", riskColor: "#f59e0b", riskBg: "#fffbeb" },
-  ];
+  const noticesData = (dashData && dashData.notices) || [];
+  const highRiskData = (dashData && dashData.risk) || [];
 
-  const filingData = [
-    { label: "GSTR-1",  filed: 365, due: 156, overdue: 31 },
-    { label: "GSTR-1A", filed: 280, due: 120, overdue: 18 },
-    { label: "GSTR-3B", filed: 300, due: 140, overdue: 22 },
-    { label: "GSTR-7",  filed: 80,  due: 30,  overdue: 5  },
-    { label: "GSTR-8",  filed: 60,  due: 20,  overdue: 3  },
-    { label: "GSTR-9",  filed: 200, due: 90,  overdue: null },
-    { label: "GSTR-9C", filed: 180, due: 85,  overdue: null },
-    { label: "CMP-08",  filed: 40,  due: 15,  overdue: 2  },
-    { label: "TDS/TCS", filed: 483, due: 156, overdue: 31 },
+  const EMPTY_FILING = [
+    { label: "GSTR-1", return_type: "GSTR1", filed: 0, due: 0, overdue: 0 },
+    { label: "GSTR-1A", return_type: "GSTR1A", filed: 0, due: 0, overdue: 0 },
+    { label: "GSTR-3B", return_type: "GSTR3B", filed: 0, due: 0, overdue: 0 },
+    { label: "TDS/TCS", return_type: "TDS_TCS", filed: 0, due: 0, overdue: 0 },
   ];
+  const filingData = (dashData && dashData.filing && dashData.filing.length)
+    ? dashData.filing
+    : EMPTY_FILING;
 
-  // Chart data for client growth
-  const chartYears = [2017,2018,2019,2020,2021,2022,2023,2024,2025,2026];
-  const clientData  = [12,28,45,58,82,110,145,186,220, allClients.length || 248];
+  // Chart data for client growth (zero-filled when there is no live data).
+  const fallbackYears = Array.from({ length: currentYear - 2016 }, (_, i) => 2017 + i);
+  const chartYears = liveYears.length ? liveYears : fallbackYears;
+  const clientData = liveValues.length ? liveValues : chartYears.map(() => 0);
   const C = { w:400, h:140, pl:32, pr:8, pt:10, pb:24 };
   const cW = C.w-C.pl-C.pr, cH = C.h-C.pb-C.pt;
-  const maxC = Math.max(...clientData)*1.15;
-  const xS = cW/(chartYears.length-1);
+  const maxC = Math.max(...clientData, 1)*1.15;
+  const xS = cW/Math.max(1, chartYears.length-1);
   const barH = (v,mx) => (v/mx)*cH;
   const ly = (v,mx) => C.pt + cH - (v/mx)*cH;
   const linePath = (data, mx) => data.map((v,i) => `${i===0?"M":"L"} ${C.pl+i*xS} ${ly(v,mx)}`).join(" ");
@@ -16375,6 +16412,11 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
               <div style={{ fontSize:"0.68rem", fontWeight:800, color:"#94a3b8", letterSpacing:"0.06em" }}>CLIENT</div>
               <div style={{ fontSize:"0.68rem", fontWeight:800, color:"#94a3b8", letterSpacing:"0.06em" }}>DETAILS</div>
             </div>
+            {noticesData.length === 0 && (
+              <div style={{ padding:"18px 12px", textAlign:"center", color:"#94a3b8", fontSize:"0.78rem", fontWeight:600 }}>
+                No overdue returns. You're all caught up.
+              </div>
+            )}
             {noticesData.map((row) => (
               <div key={row.id} className="notrow" style={{ display:"grid", gridTemplateColumns:"1fr auto", alignItems:"center", gap:"12px", padding:"11px 12px", marginBottom:"7px", background:"#fff", border:"1px solid #e5ecf5", borderLeft:`4px solid ${row.borderColor}`, borderRadius:"10px", cursor:"pointer", transition:"all .15s", boxShadow:"0 1px 4px rgba(15,23,42,0.04)" }}>
                 <div style={{ minWidth:0 }}>
@@ -16403,6 +16445,11 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
             <div style={{ display:"grid", gridTemplateColumns:"32px 1fr 66px 1fr 100px", padding:"0 8px 8px", color:"#94a3b8", fontWeight:800, fontSize:"0.68rem", letterSpacing:"0.04em" }}>
               <div>#</div><div>Taxpayer</div><div>Year</div><div>Mismatch</div><div style={{ textAlign:"right" }}>Amount</div>
             </div>
+            {highRiskData.length === 0 && (
+              <div style={{ padding:"18px 12px", textAlign:"center", color:"#94a3b8", fontSize:"0.78rem", fontWeight:600 }}>
+                No return mismatches detected.
+              </div>
+            )}
             {highRiskData.map((r, index) => (
               <div key={r.id} className="hrrow" onClick={()=>setHighRiskPopup(r)} style={{ display:"grid", gridTemplateColumns:"32px 1fr 66px 1fr 100px", alignItems:"center", padding:"10px 8px", marginBottom:"7px", background:"#fff", border:"1px solid #e5e7eb", borderLeft:`4px solid ${r.borderColor}`, borderRadius:"9px", cursor:"pointer", transition:"all .15s", boxShadow:"0 1px 4px rgba(0,0,0,0.04)" }}>
                 <div style={{ fontWeight:800, color:"#94a3b8", fontSize:"0.88rem" }}>{index + 1}</div>
@@ -16424,7 +16471,7 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
   <div style={S.hdr}>
     <div style={S.hdrTitle}>
       <span>📈</span>
-      Client Growth (2017–2026)
+      Client Growth ({chartYears[0]}–{chartYears[chartYears.length - 1]})
     </div>
 
     <span
@@ -16444,9 +16491,8 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
 
   <div style={{ padding: "12px 14px 12px", flex: 1, display: "flex", flexDirection: "column" }}>
     {(() => {
-      const chartYears = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026];
       const values = clientData;
-      const maxV = Math.max(...values) * 1.12;
+      const maxV = Math.max(...values, 1) * 1.12;
 
       const cw = C.w;
       const ch = 190;
@@ -16899,7 +16945,7 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
+        gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))",
         gap: "6px",
         marginTop: "2px",
       }}
@@ -17650,50 +17696,48 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
     let alive = true;
     (async () => {
       try {
-        const res = await gstFilingStatus({ fy: selectedFY });
-        if (!alive) return;
-        const clients = (res && res.clients) || [];
-        setSyncInfo(
-          res && res.success
-            ? `GSTN ${res.gstn === "connected" ? "Live" : "Offline"} · FY ${res.fy ?? selectedFY} · ${clients.length} clients · ${res.filed_total ?? 0} returns filed`
-            : "GSTN feed unavailable — showing sample data."
+        const clientsRes = await fetchClients();
+        const clients = clientsRes.results || clientsRes || [];
+        const statuses = await Promise.all(
+          clients.map((c) =>
+            gstFilingStatus({ fy: selectedFY, client: c.id }).catch(() => null)
+          )
         );
-        setLiveClients(
-          clients.map((c, i) => ({
+        if (!alive) return;
+        const mapped = clients.map((c, i) => {
+          const st = statuses[i];
+          const rows = (st && st.rows) || [];
+          const filed = rows.filter((r) => r.status === "FILED");
+          const lastFiled = filed
+            .slice()
+            .sort((a, b) => String(b.filed_at || "").localeCompare(String(a.filed_at || "")))[0];
+          return {
             sl: i + 1,
-            name: c.name || c.firm || "Client",
-            gstin: c.gstin,
+            name: c.name || c.trade_name || "Client",
+            gstin: c.gstin || "",
             filingType: c.filing_type || "—",
             turnover: "—",
             taxLiability: "—",
-            status: "Not Filed",
-            dateOfFiling: "",
+            status: filed.length ? "Filed" : rows.length ? "Not Filed" : "—",
+            dateOfFiling: lastFiled?.filed_at ? String(lastFiled.filed_at).slice(0, 10) : "",
             live: true,
-          }))
-        );
+          };
+        });
+        const filedTotal = statuses.reduce((n, st) => n + (st?.filed_total || 0), 0);
+        setSyncInfo(`FY ${selectedFY} · ${clients.length} clients · ${filedTotal} returns filed`);
+        setLiveClients(mapped);
       } catch {
-        if (alive) setSyncInfo("GSTN feed unavailable — showing sample data.");
+        if (alive) {
+          setSyncInfo("No filing data available.");
+          setLiveClients([]);
+        }
       }
     })();
     return () => { alive = false; };
   }, [selectedFY]);
 
-  // Realistic GST Filing Data
-  const gstFilingData = [
-    { sl: 1, name: "MODERN MASTER PUBLICATION", gstin: "09QACPS3544H1Z4", filingType: "Monthly", turnover: "₹45,20,000", taxLiability: "₹8,13,600", status: "Filed", dateOfFiling: "2025-11-20" },
-    { sl: 2, name: "M/s BHARAT KHADI UDYOG", gstin: "09AYCPA3837B1ZX", filingType: "Monthly", turnover: "₹32,10,500", taxLiability: "₹5,77,890", status: "Not Filed", dateOfFiling: "" },
-    { sl: 3, name: "N S TRADERS", gstin: "09BKBPS9165E1ZS", filingType: "Monthly", turnover: "₹68,45,000", taxLiability: "₹12,32,100", status: "Filed", dateOfFiling: "2025-11-18" },
-    { sl: 4, name: "NEERAJ AGENCIES", gstin: "09BRXPR8342B1Z6", filingType: "Monthly", turnover: "₹19,80,000", taxLiability: "₹3,56,400", status: "Not Filed", dateOfFiling: "" },
-    { sl: 5, name: "WOOD CRAFT FURNITURE", gstin: "09DILPS7916D1ZR", filingType: "Monthly", turnover: "₹55,30,000", taxLiability: "₹9,95,400", status: "Filed", dateOfFiling: "2025-11-21" },
-    { sl: 6, name: "SHIFA HANDLOOM", gstin: "09COYPM9918R1ZA", filingType: "Quarterly", turnover: "₹28,70,000", taxLiability: "₹5,16,600", status: "Not Filed", dateOfFiling: "" },
-    { sl: 7, name: "I R TEXTILES", gstin: "09ABBPI9410Q1Z9", filingType: "Monthly", turnover: "₹41,25,000", taxLiability: "₹7,42,500", status: "Filed", dateOfFiling: "2025-11-19" },
-    { sl: 8, name: "META TRADING COMPANY", gstin: "09DQWPA8816B1ZL", filingType: "Monthly", turnover: "₹73,15,000", taxLiability: "₹13,16,700", status: "Not Filed", dateOfFiling: "" },
-    { sl: 9, name: "KRISHNA ENTERPRISES", gstin: "09AXZPK5678L1Z2", filingType: "Monthly", turnover: "₹61,40,000", taxLiability: "₹11,05,200", status: "Filed", dateOfFiling: "2025-11-17" },
-    { sl: 10, name: "SINGH BROTHERS", gstin: "09BHFPS4321M1Z5", filingType: "Quarterly", turnover: "₹22,50,000", taxLiability: "₹4,05,000", status: "Filed", dateOfFiling: "2025-11-15" },
-  ];
-
-  // Prefer the live GSTN/DB feed when available, otherwise fall back to sample rows.
-  const gstRows = liveClients && liveClients.length ? liveClients : gstFilingData;
+  // Live client rows only — no sample fallback.
+  const gstRows = liveClients || [];
 
   // Filter data based on Filed / Not Filed / All
   const filteredData = gstRows.filter(item => {
@@ -17963,7 +18007,7 @@ const DashboardHome = React.memo(({ allClients = [], addClient = () => {}, navig
     toast.success(`${selectedReport} report generated!`);
     setGeneratedReport({
       type: selectedReport,
-      content: `Dummy data for ${selectedReport} from ${reportFromDate} to ${reportToDate}. Entries: 50, Total: ₹5 Cr.`,
+      content: `${selectedReport} report for ${reportFromDate} to ${reportToDate}.`,
     });
   };
 
@@ -19798,6 +19842,7 @@ case "/user/gst-return":
           formType={selectedForm}
           fy={selectedFY}
           period={selectedPeriod}
+          client={selectedClient || allClients[0] || null}
           onBack={() => setStep('summary')}
         />
       ) : step === 'summary' ? (
@@ -19820,6 +19865,7 @@ case "/user/gst-return":
           selectedPeriod={selectedPeriod}
           setSelectedPeriod={setSelectedPeriod}
           onSearch={() => setStep('summary')}
+          client={selectedClient || allClients[0] || null}
         />
       )}
     </>

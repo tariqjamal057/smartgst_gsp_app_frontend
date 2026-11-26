@@ -31,40 +31,42 @@ export default function AdminDashboard() {
 
   const daysInMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
-  // Sample Data
-  const [clientsData, setClientsData] = useState([
-    { gstin: "27AAACC1206D1ZM", name: "ABC Industries Pvt Ltd", regDate: "15 Jun 2022" },
-    { gstin: "29AABCU9603R1ZB", name: "XYZ Traders", regDate: "02 Jan 2023" },
-    { gstin: "06AAECF8579K1ZB", name: "Tech Solutions Ltd", regDate: "20 Mar 2021" },
-    { gstin: "24AAHCB8281F1ZO", name: "Retail Mart", regDate: "10 Oct 2024" },
-  ]);
+  // Live data (no sample rows): populated from the backend.
+  const [clientsData, setClientsData] = useState([]);
+  const [staffData, setStaffData] = useState([]);
+  const [adminMeta, setAdminMeta] = useState({});
+  const [filedThisMonthData, setFiledThisMonthData] = useState([]);
+  const [filingCenterData, setFilingCenterData] = useState([]);
+  const [documentsData, setDocumentsData] = useState([]);
+  const [dueDates, setDueDates] = useState([]);
 
-  const [staffData, setStaffData] = useState([
-    { name: "Rahul Sharma", role: "Senior Accountant", email: "rahul@sharma.co", status: "Active", lastActive: "2 hours ago" },
-    { name: "Priya Mehta", role: "Auditor", email: "priya@sharma.co", status: "Active", lastActive: "Online now" },
-    { name: "Amit Patel", role: "Junior Accountant", email: "amit@sharma.co", status: "Inactive", lastActive: "Yesterday" },
-  ]);
-
-  // Load real client data from the Django backend (falls back to sample data)
+  // Load real data from the Django backend.
   useEffect(() => {
     let cancelled = false;
     fetchAdminDashboard()
       .then((d) => {
         if (cancelled) return;
-        const live = d.recent_clients || [];
-        if (live.length) {
-          setClientsData(live.map((c) => ({
+        setAdminMeta(d || {});
+        setClientsData(
+          (d.recent_clients || []).map((c) => ({
             gstin: c.gstin || "",
             name: c.name || "",
             regDate: c.reg_date || "",
-          })));
-        }
-        const speculum = d.total_staff ?? null;
-        if (speculum) {
-          setStaffData(Array.from({ length: speculum }, () => ({
-            name: "Staff", role: "Team Member", email: "", status: "Active", lastActive: "—",
-          })));
-        }
+          }))
+        );
+        setDocumentsData(
+          (d.recent_documents || []).map((doc) => ({
+            month: doc.created_at
+              ? new Date(doc.created_at).toLocaleString("en-IN", { month: "long", year: "numeric" })
+              : "—",
+            date: doc.created_at
+              ? new Date(doc.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })
+              : "—",
+            name: doc.name || "Document",
+            type: (doc.file_type || "").toUpperCase() || "FILE",
+            url: doc.url || "",
+          }))
+        );
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -76,31 +78,7 @@ export default function AdminDashboard() {
   const [tempClientData, setTempClientData] = useState({});
   const [tempStaffData, setTempStaffData] = useState({});
 
-  // Static Data
-  const filedThisMonthData = [
-    { gstin: "06AAECF8579K1ZB", client: "Tech Solutions Ltd", return: "GSTR-1", filedDate: "11 Dec 2025" },
-    { gstin: "27AAACC1206D1ZM", client: "ABC Industries Pvt Ltd", return: "GSTR-3B", filedDate: "20 Dec 2025" },
-    { gstin: "29AABCU9603R1ZB", client: "XYZ Traders", return: "GSTR-1", filedDate: "11 Dec 2025" },
-  ];
-
-  const filingCenterData = [
-    { gstin: "27AAACC1206D1ZM", client: "ABC Industries Pvt Ltd", return: "GSTR-1", filedDate: "Pending" },
-    { gstin: "29AABCU9603R1ZB", client: "XYZ Traders", return: "GSTR-3B", filedDate: "-" },
-    { gstin: "06AAECF8579K1ZB", client: "Tech Solutions Ltd", return: "GSTR-1", filedDate: "11 Dec 2025" },
-  ];
-
-  const documentsData = [
-    { month: "December 2025", date: "11 Dec", name: "GSTR-1 Report - ABC Industries", type: "PDF" },
-    { month: "December 2025", date: "20 Dec", name: "GSTR-3B Summary", type: "PDF" },
-    { month: "November 2025", date: "20 Nov", name: "GSTR-3B Summary", type: "PDF" },
-  ];
-
-  const dueDates = [
-    { date: 11, return: "GSTR-1", clients: 487, status: "Pending" },
-    { date: 20, return: "GSTR-3B", clients: 1112, status: "In Progress" },
-    { date: 25, return: "GSTR-1 (QRMP)", clients: 89, status: "Filed" },
-    { date: 31, return: "GSTR-9 / 9C", clients: 23, status: "Overdue" },
-  ];
+  // Static data removed: all lists above are populated from the backend.
 
   const showToast = (text, type = "success") => {
     const toast = document.createElement("div");
@@ -199,29 +177,29 @@ export default function AdminDashboard() {
       <div className="header admin-header">
         <div>
           <h1>SmartGST - Admin Panel</h1>
-          <p className="firm-name">Sharma & Co Chartered Accountants</p>
+          <p className="firm-name">{adminMeta.firms?.[0]?.name || "—"}</p>
           <p>{new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</p>
         </div>
         <div className="revenue">
-          <strong>₹1.42 Lakh</strong> <span className="up">18% this month</span>
+          <strong>—</strong> <span className="up">—</span>
           <br />
-          <small style={{ opacity: 0.9 }}>Yearly Plan Active till 14 Mar 2026</small>
+          <small style={{ opacity: 0.9 }}>—</small>
         </div>
       </div>
 
       {/* Stats */}
       <div className="stats stats-admin">
         <div className="box clickable" onClick={() => setShowManageClients(true)}>
-          <h3>1,248</h3><p>Total GST Clients</p>
+          <h3>{adminMeta.total_clients ?? clientsData.length}</h3><p>Total GST Clients</p>
         </div>
         <div className="box clickable" onClick={() => setShowFiledThisMonth(true)}>
-          <h3>842</h3><p>GSTR Filed This Month</p>
+          <h3>{adminMeta.filings_this_month ?? filedThisMonthData.length}</h3><p>GSTR Filed This Month</p>
         </div>
         <div className="box highlight clickable" onClick={() => setShowComplianceDetails(true)}>
-          <h3>96.8%</h3><p>Compliance Score</p>
+          <h3>—</h3><p>Compliance Score</p>
         </div>
         <div className="box clickable" onClick={() => setShowManageStaff(true)}>
-          <h3>28</h3><p>Active Staff Members</p>
+          <h3>{adminMeta.total_staff ?? staffData.length}</h3><p>Active Staff Members</p>
         </div>
       </div>
 
@@ -272,10 +250,16 @@ export default function AdminDashboard() {
               <tr><th>GSTIN</th><th>Return</th><th>Due Date</th><th>Status</th></tr>
             </thead>
             <tbody>
-              <tr><td>27AAACC1206D1ZM</td><td>GSTR-1</td><td>11 Dec 2025</td><td style={{color:"#f59e0b",fontWeight:"bold"}}>Pending</td></tr>
-              <tr><td>29AABCU9603R1ZB</td><td>GSTR-3B</td><td>20 Dec 2025</td><td style={{color:"#10b981",fontWeight:"bold"}}>Ready</td></tr>
-              <tr><td>06AAECF8579K1ZB</td><td>GSTR-1</td><td>11 Dec 2025</td><td style={{color:"#10b981",fontWeight:"bold"}}>Filed</td></tr>
-              <tr><td>24AAHCB8281F1ZO</td><td>GSTR-3B</td><td>20 Dec 2025</td><td style={{color:"#ef4444",fontWeight:"bold"}}>Missing Docs</td></tr>
+              {dueDates.length === 0 ? (
+                <tr><td colSpan={4} style={{ textAlign: "center", color: "#94a3b8" }}>No upcoming due dates</td></tr>
+              ) : dueDates.map((d, i) => (
+                <tr key={i}>
+                  <td>{d.gstin}</td>
+                  <td>{d.return}</td>
+                  <td>{d.dueDate || `${d.date} ${monthNames[currentMonth]}`}</td>
+                  <td style={{ fontWeight: "bold", color: d.status === "Filed" ? "#10b981" : d.status === "Pending" ? "#f59e0b" : d.status === "Overdue" ? "#ef4444" : "#6366f1" }}>{d.status}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -313,7 +297,9 @@ export default function AdminDashboard() {
                 <tr><th>Date</th><th>Return</th><th>Clients</th><th>Status</th></tr>
               </thead>
               <tbody>
-                {dueDates.map((d, i) => (
+                {dueDates.length === 0 ? (
+                  <tr><td colSpan={4} style={{ textAlign: "center", color: "#94a3b8" }}>No due dates</td></tr>
+                ) : dueDates.map((d, i) => (
                   <tr key={i}>
                     <td>{d.date} {monthNames[currentMonth]}</td>
                     <td>{d.return}</td>
@@ -345,6 +331,9 @@ export default function AdminDashboard() {
             <table>
               <thead><tr><th>GSTIN</th><th>Client Name</th><th>Reg Date</th><th>Actions</th></tr></thead>
               <tbody>
+                {clientsData.length === 0 && (
+                  <tr><td colSpan={4} style={{ textAlign: "center", color: "#94a3b8" }}>No clients yet</td></tr>
+                )}
                 {clientsData.map((client, index) => (
                   <tr key={index}>
                     {editingClientIndex === index ? (
@@ -387,6 +376,9 @@ export default function AdminDashboard() {
             <table>
               <thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>Last Active</th><th>Actions</th></tr></thead>
               <tbody>
+                {staffData.length === 0 && (
+                  <tr><td colSpan={6} style={{ textAlign: "center", color: "#94a3b8" }}>No staff members</td></tr>
+                )}
                 {staffData.map((staff, index) => (
                   <tr key={index}>
                     {editingStaffIndex === index ? (
@@ -433,6 +425,9 @@ export default function AdminDashboard() {
             <table>
               <thead><tr><th>GSTIN</th><th>Client</th><th>Return</th><th>Status / Filed Date</th></tr></thead>
               <tbody>
+                {filingCenterData.length === 0 && (
+                  <tr><td colSpan={4} style={{ textAlign: "center", color: "#94a3b8" }}>No filing records</td></tr>
+                )}
                 {filingCenterData.map((f, i) => (
                   <tr key={i}>
                     <td>{f.gstin}</td>
@@ -452,12 +447,15 @@ export default function AdminDashboard() {
         <div className="modal-overlay" onClick={() => setShowFiledThisMonth(false)}>
           <div className="modal-content large" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>GSTR Filed This Month (842)</h2>
+              <h2>GSTR Filed This Month ({adminMeta.filings_this_month ?? filedThisMonthData.length})</h2>
               <button className="close-drawer" onClick={() => setShowFiledThisMonth(false)}>×</button>
             </div>
             <table>
               <thead><tr><th>GSTIN</th><th>Client Name</th><th>Return</th><th>Filed Date</th></tr></thead>
               <tbody>
+                {filedThisMonthData.length === 0 && (
+                  <tr><td colSpan={4} style={{ textAlign: "center", color: "#94a3b8" }}>No returns filed this month</td></tr>
+                )}
                 {filedThisMonthData.map((f, i) => (
                   <tr key={i}>
                     <td>{f.gstin}</td>
@@ -551,6 +549,9 @@ export default function AdminDashboard() {
             <table>
               <thead><tr><th>Month</th><th>Date</th><th>Report Name</th><th>Type</th><th>Action</th></tr></thead>
               <tbody>
+                {documentsData.length === 0 && (
+                  <tr><td colSpan={5} style={{ textAlign: "center", color: "#94a3b8" }}>No documents</td></tr>
+                )}
                 {documentsData.map((d, i) => (
                   <tr key={i}>
                     <td>{d.month}</td>
@@ -558,7 +559,10 @@ export default function AdminDashboard() {
                     <td>{d.name}</td>
                     <td>{d.type}</td>
                     <td>
-                      <button onClick={() => showToast(`Downloading ${d.name}...`, "info")} style={{padding:"8px 16px", background:"#10b981", color:"white", border:"none", borderRadius:"8px"}}>
+                      <button onClick={() => {
+                        if (d.url) window.open(d.url, "_blank", "noopener,noreferrer");
+                        else showToast("File not available", "error");
+                      }} style={{padding:"8px 16px", background:"#10b981", color:"white", border:"none", borderRadius:"8px"}}>
                         Download
                       </button>
                     </td>
@@ -574,20 +578,16 @@ export default function AdminDashboard() {
       {showComplianceDetails && (
         <div className="modal-overlay" onClick={() => setShowComplianceDetails(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <h2 style={{textAlign:"center"}}>Compliance Score: 96.8%</h2>
+            <h2 style={{textAlign:"center"}}>Compliance Score: —</h2>
             <div style={{textAlign:"center", margin:"40px 0"}}>
-              <div style={{width:"200px", height:"200px", borderRadius:"50%", background:`conic-gradient(#10b981 0% 96.8%, #e5e7eb 96.8% 100%)`, margin:"0 auto", display:"flex", alignItems:"center", justifyContent:"center"}}>
-                <span style={{fontSize:"2.5rem", fontWeight:"bold", color:"#10b981"}}>96.8%</span>
+              <div style={{width:"200px", height:"200px", borderRadius:"50%", background:"#f3f4f6", margin:"0 auto", display:"flex", alignItems:"center", justifyContent:"center"}}>
+                <span style={{fontSize:"2.5rem", fontWeight:"bold", color:"#94a3b8"}}>—</span>
               </div>
-              <p style={{marginTop:"20px", fontSize:"1.2rem"}}>Excellent compliance!</p>
+              <p style={{marginTop:"20px", fontSize:"1.2rem"}}>Not enough data</p>
             </div>
             <p style={{textAlign:"center"}}>Monthly Trend</p>
-            <div style={{height:"80px", background:"#f3f4f6", borderRadius:"12px", display:"flex", alignItems:"end", padding:"10px", gap:"8px"}}>
-              <div style={{width:"20%", height:"80%", background:"#10b981"}}></div>
-              <div style={{width:"20%", height:"85%", background:"#10b981"}}></div>
-              <div style={{width:"20%", height:"96%", background:"#10b981"}}></div>
-              <div style={{width:"20%", height:"90%", background:"#10b981"}}></div>
-              <div style={{width:"20%", height:"88%", background:"#f59e0b"}}></div>
+            <div style={{height:"80px", background:"#f3f4f6", borderRadius:"12px", display:"flex", alignItems:"center", justifyContent:"center", color:"#94a3b8"}}>
+              No data
             </div>
             <div style={{textAlign:"center", marginTop:"30px"}}>
               <button onClick={() => setShowComplianceDetails(false)} style={{padding:"12px 40px", background:"#7c3aed", color:"white", border:"none", borderRadius:"12px"}}>Close</button>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import LimitedInput from "./LimitedInput";
 import { toast } from "react-toastify";
 import { createClient, updateClient, verifyGstin } from "../api/services";
 
@@ -265,8 +266,8 @@ export default function AddClientModal({
                 GSTIN <span style={{ color: "#ef4444" }}>*</span>
               </label>
               <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                <input
-                  name="gstin"
+<LimitedInput kind="gstin"
+                   name="gstin"
                   value={form.gstin}
                   onChange={handleChange}
                   maxLength={15}
@@ -363,8 +364,8 @@ export default function AddClientModal({
                 <label style={labelStyle}>
                   Mobile Number <span style={{ color: "#ef4444" }}>*</span>
                 </label>
-                <input
-                  name="mobile"
+<LimitedInput kind="phone"
+                   name="mobile"
                   value={form.mobile}
                   onChange={handleChange}
                   maxLength={10}

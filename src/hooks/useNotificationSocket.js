@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
-const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/+$/, "");
+const API_BASE_URL = (
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.PROD ? "https://api.taxoratax.com" : "http://localhost:8000")
+).replace(/\/+$/, "");
 
 function buildWsUrl() {
   const token = localStorage.getItem("access_token");
